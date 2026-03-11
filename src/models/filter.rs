@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 /// All fields are optional; missing values mean "no constraint".  The struct
 /// is serialised by Leptos server-function machinery for the client→server
 /// round-trip, so all types must implement `Serialize + Deserialize`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SpotFilter {
     /// Filter by callsign prefix (case-insensitive, trailing wildcard applied).
     pub callsign: Option<String>,

@@ -4,17 +4,22 @@
 /// lock.  Entries expire after a configurable [`Duration`]; stale entries are
 /// evicted lazily on the next read rather than by a background sweeper.
 ///
-/// [`QueryCache`] composes three `TtlCache` instances covering the three
-/// aggregate queries whose results are identical across all users:
+/// [`QueryCache`] composes five `TtlCache` instances, all shared across every
+/// concurrent user so that an identical query from userA and userB hits
+/// ClickHouse only once per TTL window:
 ///
-/// | Query              | Cache key         | Default TTL |
-/// |--------------------|-------------------|-------------|
-/// | `get_public_config`| `()`              | 5 minutes   |
-/// | `get_stats`        | `(since, until)`  | 30 seconds  |
-/// | `get_band_counts`  | `since`           | 30 seconds  |
+/// | Query              | Cache key                      | TTL       |
+/// |--------------------|--------------------------------|-----------|
+/// | `get_public_config`| `()`                           | 5 minutes |
+/// | `get_stats`        | `(since_rounded, until_rounded)`| 60 seconds |
+/// | `get_band_counts`  | `since_rounded`                | 60 seconds |
+/// | `get_map_spots`    | `SpotFilter` (normalised)      | 60 seconds |
+/// | `get_spots`        | `SpotFilter` (normalised)      | 60 seconds |
 ///
-/// Filter-specific queries (`get_map_spots`, `get_spots`) are **not** cached
-/// here because their key space is unbounded and hit rates are unpredictable.
+/// Timestamp fields inside a [`SpotFilter`] key are rounded to the nearest
+/// 60 seconds before lookup (via [`QueryCache::normalize_filter_key`]) so that
+/// requests whose `since_unix` differs by only a few seconds still share the
+/// same entry.
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -22,7 +27,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::RwLock;
 
-use crate::models::{BandInfo, PublicConfig, SpotStats};
+use crate::models::{BandInfo, MapSpot, PublicConfig, SpotFilter, SpotStats, WsprSpot};
 
 // ---------------------------------------------------------------------------
 // Generic TTL cache
@@ -74,8 +79,8 @@ where
 // Composed query cache
 // ---------------------------------------------------------------------------
 
-/// Shared cache for the three aggregate queries that return identical results
-/// for all users on the same time window.
+/// Shared cache for all ClickHouse queries, keyed so that identical requests
+/// from different users share a single cache entry.
 ///
 /// Inject this as an `Arc<QueryCache>` Axum extension and retrieve it in
 /// server functions via `expect_context::<Arc<QueryCache>>()`.
@@ -83,12 +88,17 @@ pub struct QueryCache {
     /// Cache for `get_public_config()`.  TTL: 5 minutes.
     pub config: TtlCache<(), PublicConfig>,
     /// Cache for `get_stats(since, until)`.  Key timestamps are rounded to the
-    /// nearest 60 seconds before lookup so that requests within the same minute
-    /// share an entry.  TTL: 30 seconds.
+    /// nearest 60 seconds before lookup.  TTL: 60 seconds.
     pub stats: TtlCache<(i64, i64), SpotStats>,
     /// Cache for `get_band_counts(since)`.  Key rounded to nearest 60 s.
-    /// TTL: 30 seconds.
+    /// TTL: 60 seconds.
     pub band_counts: TtlCache<i64, Vec<BandInfo>>,
+    /// Cache for `get_map_spots(filter)`.  Key is a timestamp-normalised clone
+    /// of the `SpotFilter`.  TTL: 60 seconds.
+    pub map_spots: TtlCache<SpotFilter, Vec<MapSpot>>,
+    /// Cache for `get_spots(filter)`.  Key is a timestamp-normalised clone of
+    /// the `SpotFilter`.  TTL: 60 seconds.
+    pub spots: TtlCache<SpotFilter, Vec<WsprSpot>>,
 }
 
 impl QueryCache {
@@ -96,8 +106,10 @@ impl QueryCache {
     pub fn new() -> Self {
         Self {
             config: TtlCache::new(Duration::from_secs(300)),
-            stats: TtlCache::new(Duration::from_secs(30)),
-            band_counts: TtlCache::new(Duration::from_secs(30)),
+            stats: TtlCache::new(Duration::from_secs(60)),
+            band_counts: TtlCache::new(Duration::from_secs(60)),
+            map_spots: TtlCache::new(Duration::from_secs(60)),
+            spots: TtlCache::new(Duration::from_secs(60)),
         }
     }
 
@@ -108,6 +120,30 @@ impl QueryCache {
     /// single cache entry.
     pub fn round_ts(ts: i64) -> i64 {
         (ts / 60) * 60
+    }
+
+    /// Return a copy of `filter` suitable for use as a cache key.
+    ///
+    /// * `None` timestamps are resolved to `default_since` / `None` (no upper
+    ///   bound) before rounding so that the "default view" always maps to the
+    ///   same key regardless of the exact wall-clock second at request time.
+    /// * Both `since_unix` and `until_unix` are rounded to the nearest 60-second
+    ///   boundary so requests within the same minute share an entry.
+    pub fn normalize_filter_key(filter: &SpotFilter, default_since: i64) -> SpotFilter {
+        SpotFilter {
+            callsign: filter.callsign.clone(),
+            grid: filter.grid.clone(),
+            band_hz: filter.band_hz,
+            snr_min: filter.snr_min,
+            power_max: filter.power_max,
+            since_unix: Some(Self::round_ts(
+                filter.since_unix.unwrap_or(default_since),
+            )),
+            until_unix: filter.until_unix.map(Self::round_ts),
+            limit: filter.limit,
+            offset: filter.offset,
+            grid_only: filter.grid_only,
+        }
     }
 }
 

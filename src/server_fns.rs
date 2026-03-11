@@ -8,7 +8,6 @@
 use leptos::prelude::*;
 
 use crate::models::{BandInfo, MapSpot, PublicConfig, SpotFilter, SpotStats, WsprSpot};
-use crate::models::grid::{grid_to_latlon, haversine_km};
 
 // ---------------------------------------------------------------------------
 // Server function: public configuration
@@ -61,20 +60,31 @@ pub async fn get_public_config() -> Result<PublicConfig, ServerFnError> {
 /// Fetch lightweight map-marker data for the given filter.
 ///
 /// Only spots that carry a valid Maidenhead grid are returned; type-2 messages
-/// (no grid) are excluded because they cannot be plotted.
+/// (no grid) are excluded because they cannot be plotted.  Results are cached
+/// for 60 seconds, shared across all users, keyed on a timestamp-normalised
+/// copy of the filter so that the common "default view" is only queried once
+/// per minute regardless of how many browsers are open.
 #[server]
 pub async fn get_map_spots(filter: SpotFilter) -> Result<Vec<MapSpot>, ServerFnError> {
     use std::sync::Arc;
 
+    use crate::cache::SharedQueryCache;
     use crate::config::Config;
     use crate::db::queries;
+    use crate::models::grid::{grid_to_latlon, haversine_km};
 
     let config = expect_context::<Arc<Config>>();
-    let client = expect_context::<clickhouse::Client>();
-
     let default_since =
         chrono::Utc::now().timestamp() - config.time_window_hours as i64 * 3600;
 
+    let cache = expect_context::<SharedQueryCache>();
+    let cache_key = crate::cache::QueryCache::normalize_filter_key(&filter, default_since);
+
+    if let Some(cached) = cache.map_spots.get(&cache_key).await {
+        return Ok(cached);
+    }
+
+    let client = expect_context::<clickhouse::Client>();
     let home = config.my_grid.as_deref().and_then(grid_to_latlon);
 
     let mut spots: Vec<MapSpot> = match queries::query_map_spots(
@@ -100,6 +110,7 @@ pub async fn get_map_spots(filter: SpotFilter) -> Result<Vec<MapSpot>, ServerFnE
         }
     }
 
+    cache.map_spots.set(cache_key, spots.clone()).await;
     Ok(spots)
 }
 
@@ -108,19 +119,30 @@ pub async fn get_map_spots(filter: SpotFilter) -> Result<Vec<MapSpot>, ServerFnE
 // ---------------------------------------------------------------------------
 
 /// Fetch full spot records with all columns, paginated.
+///
+/// Results are cached for 60 seconds, shared across all users, keyed on a
+/// timestamp-normalised copy of the filter (same strategy as `get_map_spots`).
 #[server]
 pub async fn get_spots(filter: SpotFilter) -> Result<Vec<WsprSpot>, ServerFnError> {
     use std::sync::Arc;
 
+    use crate::cache::SharedQueryCache;
     use crate::config::Config;
     use crate::db::queries;
+    use crate::models::grid::{grid_to_latlon, haversine_km};
 
     let config = expect_context::<Arc<Config>>();
-    let client = expect_context::<clickhouse::Client>();
-
     let default_since =
         chrono::Utc::now().timestamp() - config.time_window_hours as i64 * 3600;
 
+    let cache = expect_context::<SharedQueryCache>();
+    let cache_key = crate::cache::QueryCache::normalize_filter_key(&filter, default_since);
+
+    if let Some(cached) = cache.spots.get(&cache_key).await {
+        return Ok(cached);
+    }
+
+    let client = expect_context::<clickhouse::Client>();
     let home = config.my_grid.as_deref().and_then(grid_to_latlon);
 
     let mut spots: Vec<WsprSpot> = match queries::query_spots(
@@ -151,6 +173,7 @@ pub async fn get_spots(filter: SpotFilter) -> Result<Vec<WsprSpot>, ServerFnErro
         }
     }
 
+    cache.spots.set(cache_key, spots.clone()).await;
     Ok(spots)
 }
 

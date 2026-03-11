@@ -76,8 +76,12 @@ pub fn App() -> impl IntoView {
 
 #[component]
 fn HomePage() -> impl IntoView {
-    // Shared filter state written by FilterPanel, read by all data fetching.
+    // Shared filter state written by FilterPanel on every input event.
     let filter = RwSignal::new(SpotFilter::default());
+    // Debounced copy of `filter`: updated 1 second after the last change.
+    // All server resources read this signal so rapid keystrokes / slider drags
+    // do not fire a ClickHouse query on every event.
+    let debounced_filter = RwSignal::new(SpotFilter::default());
     // Grid selected by clicking a spot table row — drives map highlight.
     let selected_grid: RwSignal<Option<String>> = RwSignal::new(None);
     // Live-stream badge state.
@@ -97,20 +101,20 @@ fn HomePage() -> impl IntoView {
     let config_resource = LocalResource::new(get_public_config);
 
     let map_spots_resource =
-        LocalResource::new(move || get_map_spots(filter.get()));
+        LocalResource::new(move || get_map_spots(debounced_filter.get()));
 
     let spots_resource =
-        LocalResource::new(move || get_spots(filter.get()));
+        LocalResource::new(move || get_spots(debounced_filter.get()));
 
     let stats_resource = LocalResource::new(move || {
-        let since = filter.with(|f| f.since_unix);
-        let until = filter.with(|f| f.until_unix);
+        let since = debounced_filter.with(|f| f.since_unix);
+        let until = debounced_filter.with(|f| f.until_unix);
         let now = chrono::Utc::now().timestamp();
         get_stats(since.unwrap_or(now - 3600), until.unwrap_or(now))
     });
 
     let bands_resource = LocalResource::new(move || {
-        let since = filter.with(|f| f.since_unix);
+        let since = debounced_filter.with(|f| f.since_unix);
         let now = chrono::Utc::now().timestamp();
         get_band_counts(since.unwrap_or(now - 3600))
     });
@@ -177,6 +181,40 @@ fn HomePage() -> impl IntoView {
             live_state.set(LiveState::Off);
         }
     });
+
+    // Debounce: propagate `filter` → `debounced_filter` after 1 second of
+    // inactivity.  Any pending timer is cancelled when a new input event
+    // arrives, so only the final settled value fires a server request.
+    // This block is client-only because `web_sys::window()` does not exist on
+    // the server and `LocalResource`s never fetch during SSR anyway.
+    #[cfg(feature = "hydrate")]
+    {
+        let debounce_handle: RwSignal<Option<i32>> = RwSignal::new(None);
+
+        Effect::new(move |_| {
+            let new_filter = filter.get();
+            let window = web_sys::window().expect("window must exist in WASM");
+
+            // Cancel the previous pending timer, if any.
+            if let Some(handle) = debounce_handle.get_untracked() {
+                window.clear_timeout_with_handle(handle);
+            }
+
+            // Schedule `debounced_filter` update for 1 000 ms from now.
+            let cb = wasm_bindgen::closure::Closure::once(move || {
+                debounced_filter.set(new_filter);
+            });
+            let handle = window
+                .set_timeout_with_callback_and_timeout_and_arguments_0(
+                    cb.as_ref().unchecked_ref(),
+                    1_000,
+                )
+                .expect("setTimeout must not fail");
+            // `forget` keeps the closure alive until the timer fires.
+            cb.forget();
+            debounce_handle.set(Some(handle));
+        });
+    }
 
     // Client-side SSE connection (no-op on SSR).
     #[cfg(feature = "hydrate")]
