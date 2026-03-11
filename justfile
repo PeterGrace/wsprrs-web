@@ -18,11 +18,14 @@ make-image:
   -t {{registry}}/{{image}}:{{tag}} \
   .
 
-release-patch:
+leptos-test:
+  cargo leptos test
+
+release-patch: leptos-test
   cargo release --no-publish --no-verify patch --execute
-release-minor:
+release-minor: leptos-test
   cargo release --no-publish --no-verify minor --execute
-release-major:
+release-major: leptos-test
   cargo release --no-publish --no-verify minor --execute
 
 # Sync kustomize/kustomization.yaml newTag with the current Cargo.toml version.

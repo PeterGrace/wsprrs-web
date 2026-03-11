@@ -189,6 +189,7 @@ fn HomePage() -> impl IntoView {
     // the server and `LocalResource`s never fetch during SSR anyway.
     #[cfg(feature = "hydrate")]
     {
+        use wasm_bindgen::JsCast;
         let debounce_handle: RwSignal<Option<i32>> = RwSignal::new(None);
 
         Effect::new(move |_| {
