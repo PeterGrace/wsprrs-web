@@ -544,6 +544,15 @@ body {
     .live-dot { background: var(--warn); }
   }
 
+  &--reconnecting {
+    border-color: var(--danger);
+    color: var(--danger);
+    .live-dot {
+      background: var(--danger);
+      animation: pulse 1s ease-in-out infinite;
+    }
+  }
+
   &--error {
     border-color: var(--danger);
     color: var(--danger);

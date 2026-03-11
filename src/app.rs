@@ -94,7 +94,7 @@ fn HomePage() -> impl IntoView {
     // about reading resources outside <Suspense/> and eliminates hydration
     // mismatches caused by stale SSR-embedded data.
     // -----------------------------------------------------------------------
-    let config_resource = LocalResource::new(|| get_public_config());
+    let config_resource = LocalResource::new(get_public_config);
 
     let map_spots_resource =
         LocalResource::new(move || get_map_spots(filter.get()));
@@ -181,15 +181,38 @@ fn HomePage() -> impl IntoView {
     // Client-side SSE connection (no-op on SSR).
     #[cfg(feature = "hydrate")]
     {
+        use wasm_bindgen::JsCast;
+
         let sse_handle: RwSignal<Option<crate::sse::SseHandle>> = RwSignal::new(None);
+        // Tracks how many consecutive reconnect attempts have been made.
+        // Reset to 0 on a successful connection.
+        let reconnect_attempt: RwSignal<u32> = RwSignal::new(0);
+
+        // Maximum consecutive reconnect attempts before giving up entirely.
+        const MAX_RECONNECT_ATTEMPTS: u32 = 10;
+
+        // Helper: close any live SSE handle stored in the signal.
+        let close_handle = move || {
+            sse_handle.update(|h| {
+                if let Some(handle) = h.take() {
+                    handle.close();
+                }
+            });
+        };
 
         Effect::new(move |_| {
             match live_state.get() {
                 LiveState::Connecting => {
+                    // Close any stale handle before opening a fresh connection.
+                    close_handle();
+
                     let handle = crate::sse::start_sse(
                         "/api/stream",
-                        // on_open: HTTP handshake complete → flip badge immediately
-                        move || live_state.set(LiveState::Connected),
+                        // on_open: HTTP handshake complete → flip badge and reset backoff
+                        move || {
+                            reconnect_attempt.set(0);
+                            live_state.set(LiveState::Connected);
+                        },
                         // on_spots: new data arrived → refresh all resources
                         move |_json| {
                             map_spots_resource.refetch();
@@ -197,17 +220,56 @@ fn HomePage() -> impl IntoView {
                             stats_resource.refetch();
                             bands_resource.refetch();
                         },
-                        // on_error: connection lost → show error state
-                        move || live_state.set(LiveState::Error),
+                        // on_error: connection lost → schedule reconnect with
+                        // exponential backoff, or give up after MAX_RECONNECT_ATTEMPTS.
+                        move || {
+                            // Read without tracking to avoid re-triggering Effects.
+                            let attempt = reconnect_attempt.get_untracked();
+
+                            if attempt >= MAX_RECONNECT_ATTEMPTS {
+                                live_state.set(LiveState::Error);
+                                return;
+                            }
+
+                            // Delay doubles each attempt: 1 s, 2 s, 4 s, … capped at 30 s.
+                            let delay_ms = (1_000u32 << attempt.min(4)).min(30_000) as i32;
+                            reconnect_attempt.update(|a| *a += 1);
+                            // Show "Reconnecting..." badge (1-based attempt number).
+                            live_state.set(LiveState::Reconnecting(attempt + 1));
+
+                            let window =
+                                web_sys::window().expect("should always have a Window in WASM");
+                            // Closure::once is used because the timer fires exactly once.
+                            // We guard on the current state so that a pending timer is
+                            // harmlessly discarded if the user switches live mode off.
+                            let cb = wasm_bindgen::closure::Closure::once(move || {
+                                if matches!(
+                                    live_state.get_untracked(),
+                                    LiveState::Reconnecting(_)
+                                ) {
+                                    live_state.set(LiveState::Connecting);
+                                }
+                            });
+                            window
+                                .set_timeout_with_callback_and_timeout_and_arguments_0(
+                                    cb.as_ref().unchecked_ref(),
+                                    delay_ms,
+                                )
+                                .expect("setTimeout should not fail");
+                            // Leak the closure so it remains valid when the timer fires.
+                            cb.forget();
+                        },
                     );
                     sse_handle.set(Some(handle));
                 }
+                // Connection errored; close the stale handle and wait for the
+                // timer (set in the on_error callback above) to trigger Connecting.
+                LiveState::Reconnecting(_) => {
+                    close_handle();
+                }
                 LiveState::Off | LiveState::Error => {
-                    sse_handle.update(|h| {
-                        if let Some(handle) = h.take() {
-                            handle.close();
-                        }
-                    });
+                    reconnect_attempt.set(0);
+                    close_handle();
                 }
                 LiveState::Connected => {}
             }

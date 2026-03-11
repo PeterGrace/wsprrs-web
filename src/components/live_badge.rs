@@ -14,7 +14,10 @@ pub enum LiveState {
     Connecting,
     /// Receiving events.
     Connected,
-    /// Connection lost or browser error.
+    /// Connection lost; waiting to attempt reconnect.  The inner value is the
+    /// 1-based attempt number (e.g. 1 means the first reconnect is pending).
+    Reconnecting(u32),
+    /// All reconnect attempts exhausted.
     Error,
 }
 
@@ -34,6 +37,7 @@ impl LiveState {
             LiveState::Off => "off",
             LiveState::Connecting => "connecting",
             LiveState::Connected => "connected",
+            LiveState::Reconnecting(_) => "reconnecting",
             LiveState::Error => "error",
         }
     }
@@ -43,6 +47,7 @@ impl LiveState {
             LiveState::Off => "Live off",
             LiveState::Connecting => "Connecting...",
             LiveState::Connected => "Live",
+            LiveState::Reconnecting(_) => "Reconnecting...",
             LiveState::Error => "Disconnected",
         }
     }

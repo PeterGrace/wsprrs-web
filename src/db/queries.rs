@@ -98,7 +98,7 @@ pub async fn query_map_spots(
         .await
         .context("map spots query")?;
 
-    Ok(rows.into_iter().filter_map(|r| Option::<MapSpot>::from(r)).collect())
+    Ok(rows.into_iter().filter_map(Option::<MapSpot>::from).collect())
 }
 
 /// Fetch full spot records with all ClickHouse columns.
@@ -289,7 +289,7 @@ pub async fn query_new_spots(
         .await
         .context("new spots query")?;
 
-    Ok(rows.into_iter().filter_map(|r| Option::<MapSpot>::from(r)).collect())
+    Ok(rows.into_iter().filter_map(Option::<MapSpot>::from).collect())
 }
 
 // ---------------------------------------------------------------------------
