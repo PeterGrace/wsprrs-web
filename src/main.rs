@@ -74,6 +74,8 @@ async fn main() {
     tokio::spawn(spot_poll_task(
         db.clone(),
         config.clickhouse_table.clone(),
+        config.ignore_callsigns.clone(),
+        config.spot_limit,
         Arc::clone(&spot_tx),
     ));
 
@@ -143,6 +145,8 @@ async fn main() {
 async fn spot_poll_task(
     db: clickhouse::Client,
     table: String,
+    ignore_callsigns: Vec<String>,
+    spot_limit: u32,
     tx: std::sync::Arc<tokio::sync::broadcast::Sender<std::sync::Arc<String>>>,
 ) {
     use wsprrs_web::db::queries;
@@ -156,7 +160,7 @@ async fn spot_poll_task(
     loop {
         interval.tick().await;
 
-        match queries::query_new_spots(&db, &table, last_unix).await {
+        match queries::query_new_spots(&db, &table, last_unix, &ignore_callsigns, spot_limit).await {
             Ok(spots) if !spots.is_empty() => {
                 last_unix = spots
                     .iter()

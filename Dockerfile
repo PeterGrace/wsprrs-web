@@ -1,3 +1,12 @@
+FROM lukemathwalker/cargo-chef:latest AS chef
+WORKDIR /app
+
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+
+
 # Get started with a build env with Rust nightly
 FROM rustlang/rust:nightly-trixie as builder
 
@@ -14,6 +23,7 @@ RUN cp cargo-binstall /usr/local/cargo/bin
 RUN apt-get update -y \
   && apt-get install -y --no-install-recommends clang
 
+
 # Install cargo-leptos
 RUN cargo binstall cargo-leptos -y
 
@@ -23,6 +33,9 @@ RUN rustup target add wasm32-unknown-unknown
 # Make an /app dir, which everything will eventually live in
 RUN mkdir -p /app
 WORKDIR /app
+RUN cargo install cargo-chef
+COPY --from=planner /app/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
 
 # Build the app

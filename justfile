@@ -8,7 +8,7 @@ cargo_version := `grep '^version = ' Cargo.toml | head -1 | cut -d'"' -f2`
 
 all: make-image
 
-patchbuild: release-patch make-image sync-kustomize kustomize
+deploy: make-image sync-kustomize kustomize
 
 make-image:
   docker buildx build --push --platform linux/amd64 \

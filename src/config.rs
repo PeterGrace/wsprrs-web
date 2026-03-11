@@ -26,6 +26,19 @@ pub struct Config {
 
     /// How many hours of data to show on initial page load.
     pub time_window_hours: u32,
+
+    /// Default and maximum row limit applied to spot and map-spot queries.
+    ///
+    /// Populated from `WSPR_SPOT_LIMIT` (default: `5000`).  Acts as both the
+    /// fallback when the caller supplies no limit and the hard cap on any
+    /// caller-supplied limit.
+    pub spot_limit: u32,
+
+    /// Callsigns excluded from all query results, normalised to uppercase.
+    ///
+    /// Populated from `WSPR_IGNORE_CALLSIGNS` as a comma-separated list,
+    /// e.g. `W3POG,N0CALL`.  Empty list disables the filter.
+    pub ignore_callsigns: Vec<String>,
 }
 
 #[cfg(feature = "ssr")]
@@ -55,6 +68,19 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(1),
+            spot_limit: std::env::var("WSPR_SPOT_LIMIT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(5_000),
+            ignore_callsigns: std::env::var("WSPR_IGNORE_CALLSIGNS")
+                .ok()
+                .map(|v| {
+                    v.split(',')
+                        .map(|s| s.trim().to_uppercase())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default(),
         })
     }
 

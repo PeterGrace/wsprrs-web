@@ -39,7 +39,7 @@ pub async fn get_public_config() -> Result<PublicConfig, ServerFnError> {
     let since = chrono::Utc::now().timestamp()
         - config.time_window_hours as i64 * 3600;
 
-    let bands = queries::query_band_counts(&client, &config.clickhouse_table, since)
+    let bands = queries::query_band_counts(&client, &config.clickhouse_table, since, &config.ignore_callsigns)
         .await
         .unwrap_or_else(|e| {
             tracing::error!("get_public_config band_counts query failed: {e:#}");
@@ -82,6 +82,8 @@ pub async fn get_map_spots(filter: SpotFilter) -> Result<Vec<MapSpot>, ServerFnE
         &filter,
         &config.clickhouse_table,
         default_since,
+        &config.ignore_callsigns,
+        config.spot_limit,
     )
     .await
     {
@@ -126,6 +128,8 @@ pub async fn get_spots(filter: SpotFilter) -> Result<Vec<WsprSpot>, ServerFnErro
         &filter,
         &config.clickhouse_table,
         default_since,
+        &config.ignore_callsigns,
+        config.spot_limit,
     )
     .await
     {
@@ -183,6 +187,7 @@ pub async fn get_stats(since_unix: i64, until_unix: i64) -> Result<SpotStats, Se
         &config.clickhouse_table,
         since_unix,
         until_unix,
+        &config.ignore_callsigns,
     )
     .await
     {
@@ -223,7 +228,7 @@ pub async fn get_band_counts(since_unix: i64) -> Result<Vec<BandInfo>, ServerFnE
     let client = expect_context::<clickhouse::Client>();
 
     let result: Vec<BandInfo> =
-        match queries::query_band_counts(&client, &config.clickhouse_table, since_unix).await {
+        match queries::query_band_counts(&client, &config.clickhouse_table, since_unix, &config.ignore_callsigns).await {
             Ok(b) => b,
             Err(e) => {
                 tracing::error!("get_band_counts query failed: {e:#}");
@@ -252,7 +257,7 @@ pub async fn get_callsign_suggestions(
     let config = expect_context::<Arc<Config>>();
     let client = expect_context::<clickhouse::Client>();
 
-    queries::query_callsign_suggestions(&client, &config.clickhouse_table, &prefix)
+    queries::query_callsign_suggestions(&client, &config.clickhouse_table, &prefix, &config.ignore_callsigns)
         .await
         .map_err(|e| {
             tracing::error!("get_callsign_suggestions query failed: {e:#}");

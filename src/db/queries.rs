@@ -66,19 +66,23 @@ fn sanitise_locator(s: &str) -> String {
 ///
 /// # Arguments
 ///
-/// * `client`        — ClickHouse HTTP client
-/// * `filter`        — query constraints (time window, callsign, band, …)
-/// * `table`         — fully-qualified table name, e.g. `"wspr_spots"`
-/// * `default_since` — fallback `since_unix` when `filter.since_unix` is `None`
+/// * `client`           — ClickHouse HTTP client
+/// * `filter`           — query constraints (time window, callsign, band, …)
+/// * `table`            — fully-qualified table name, e.g. `"wspr_spots"`
+/// * `default_since`    — fallback `since_unix` when `filter.since_unix` is `None`
+/// * `ignore_callsigns` — server-configured callsigns to exclude (case-insensitive)
+/// * `spot_limit`       — default and maximum row count (`WSPR_SPOT_LIMIT`)
 pub async fn query_map_spots(
     client: &clickhouse::Client,
     filter: &SpotFilter,
     table: &str,
     default_since: i64,
+    ignore_callsigns: &[String],
+    spot_limit: u32,
 ) -> anyhow::Result<Vec<MapSpot>> {
     let since = filter.since_unix.unwrap_or(default_since);
     let until = filter.until_unix.unwrap_or(i64::MAX);
-    let limit = filter.limit.unwrap_or(2000).min(10_000);
+    let limit = filter.limit.unwrap_or(spot_limit).min(spot_limit);
 
     let mut sql = format!(
         "SELECT window_start_unix, callsign, grid, freq_hz, snr_db, power_dbm \
@@ -88,6 +92,7 @@ pub async fn query_map_spots(
            AND window_start_unix <= {until}"
     );
 
+    append_ignore_callsigns(&mut sql, ignore_callsigns);
     append_shared_filters(&mut sql, filter);
 
     sql.push_str(&format!(" ORDER BY window_start_unix DESC LIMIT {limit}"));
@@ -104,15 +109,22 @@ pub async fn query_map_spots(
 /// Fetch full spot records with all ClickHouse columns.
 ///
 /// Supports pagination via `filter.limit` / `filter.offset`.
+///
+/// # Arguments
+///
+/// * `ignore_callsigns` — server-configured callsigns to exclude (case-insensitive)
+/// * `spot_limit`       — default and maximum row count (`WSPR_SPOT_LIMIT`)
 pub async fn query_spots(
     client: &clickhouse::Client,
     filter: &SpotFilter,
     table: &str,
     default_since: i64,
+    ignore_callsigns: &[String],
+    spot_limit: u32,
 ) -> anyhow::Result<Vec<WsprSpot>> {
     let since = filter.since_unix.unwrap_or(default_since);
     let until = filter.until_unix.unwrap_or(i64::MAX);
-    let limit = filter.limit.unwrap_or(500).min(5_000);
+    let limit = filter.limit.unwrap_or(spot_limit).min(spot_limit);
     let offset = filter.offset.unwrap_or(0);
 
     let mut sql = format!(
@@ -128,6 +140,7 @@ pub async fn query_spots(
         sql.push_str(" AND grid != ''");
     }
 
+    append_ignore_callsigns(&mut sql, ignore_callsigns);
     append_shared_filters(&mut sql, filter);
 
     sql.push_str(&format!(
@@ -145,13 +158,18 @@ pub async fn query_spots(
 
 /// Return aggregate statistics (total spots, unique callsigns, unique grids,
 /// time range) over the specified window.
+///
+/// # Arguments
+///
+/// * `ignore_callsigns` — server-configured callsigns to exclude from counts
 pub async fn query_stats(
     client: &clickhouse::Client,
     table: &str,
     since_unix: i64,
     until_unix: i64,
+    ignore_callsigns: &[String],
 ) -> anyhow::Result<SpotStats> {
-    let sql = format!(
+    let mut sql = format!(
         "SELECT \
             count()                         AS total_spots, \
             uniqExact(callsign)             AS unique_callsigns, \
@@ -162,6 +180,7 @@ pub async fn query_stats(
          WHERE window_start_unix >= {since_unix} \
            AND window_start_unix <= {until_unix}"
     );
+    append_ignore_callsigns(&mut sql, ignore_callsigns);
 
     let rows: Vec<SpotStatsRow> = client
         .query(&sql)
@@ -186,20 +205,25 @@ pub async fn query_stats(
 ///
 /// Frequencies are bucketed to the nearest standard WSPR band using the
 /// same ±10 kHz tolerance as [`find_band`].
+///
+/// # Arguments
+///
+/// * `ignore_callsigns` — server-configured callsigns to exclude from counts
 pub async fn query_band_counts(
     client: &clickhouse::Client,
     table: &str,
     since_unix: i64,
+    ignore_callsigns: &[String],
 ) -> anyhow::Result<Vec<BandInfo>> {
     // Round to nearest 1 kHz to collapse the ~200 Hz WSPR signal spread, then
     // count per rounded frequency.
-    let sql = format!(
+    let mut sql = format!(
         "SELECT toFloat64(round(freq_hz / 1000) * 1000) AS freq_hz, count() AS cnt \
          FROM {table} \
-         WHERE window_start_unix >= {since_unix} \
-         GROUP BY freq_hz \
-         ORDER BY freq_hz"
+         WHERE window_start_unix >= {since_unix}"
     );
+    append_ignore_callsigns(&mut sql, ignore_callsigns);
+    sql.push_str(" GROUP BY freq_hz ORDER BY freq_hz");
 
     let rows: Vec<FreqCountRow> = client
         .query(&sql)
@@ -237,11 +261,17 @@ pub async fn query_band_counts(
 
 /// Return up to 20 callsigns that start with `prefix` (case-insensitive).
 ///
-/// Used for autocomplete in the filter panel.
+/// Used for autocomplete in the filter panel.  Ignored callsigns are excluded
+/// so they do not appear in suggestions.
+///
+/// # Arguments
+///
+/// * `ignore_callsigns` — server-configured callsigns to exclude from results
 pub async fn query_callsign_suggestions(
     client: &clickhouse::Client,
     table: &str,
     prefix: &str,
+    ignore_callsigns: &[String],
 ) -> anyhow::Result<Vec<String>> {
     let safe = sanitise_callsign(prefix);
     if safe.is_empty() {
@@ -249,13 +279,13 @@ pub async fn query_callsign_suggestions(
     }
     let like_pat = format!("{}%", safe.to_uppercase());
 
-    let sql = format!(
+    let mut sql = format!(
         "SELECT DISTINCT callsign \
          FROM {table} \
-         WHERE upper(callsign) LIKE '{like_pat}' \
-         ORDER BY callsign \
-         LIMIT 20"
+         WHERE upper(callsign) LIKE '{like_pat}'"
     );
+    append_ignore_callsigns(&mut sql, ignore_callsigns);
+    sql.push_str(" ORDER BY callsign LIMIT 20");
 
     let rows: Vec<CallsignRow> = client
         .query(&sql)
@@ -269,19 +299,26 @@ pub async fn query_callsign_suggestions(
 /// Fetch spots newer than `after_unix` for the SSE live stream.
 ///
 /// Returns at most 500 spots to keep individual events small.
+///
+/// # Arguments
+///
+/// * `ignore_callsigns` — server-configured callsigns to exclude from results
+/// * `spot_limit`       — maximum number of spots to return per poll (`WSPR_SPOT_LIMIT`)
 pub async fn query_new_spots(
     client: &clickhouse::Client,
     table: &str,
     after_unix: i64,
+    ignore_callsigns: &[String],
+    spot_limit: u32,
 ) -> anyhow::Result<Vec<MapSpot>> {
-    let sql = format!(
+    let mut sql = format!(
         "SELECT window_start_unix, callsign, grid, freq_hz, snr_db, power_dbm \
          FROM {table} \
          WHERE grid != '' \
-           AND window_start_unix > {after_unix} \
-         ORDER BY window_start_unix DESC \
-         LIMIT 500"
+           AND window_start_unix > {after_unix}"
     );
+    append_ignore_callsigns(&mut sql, ignore_callsigns);
+    sql.push_str(&format!(" ORDER BY window_start_unix DESC LIMIT {spot_limit}"));
 
     let rows: Vec<MapSpotRow> = client
         .query(&sql)
@@ -305,6 +342,21 @@ fn parse_exclude_prefix(s: &str) -> (bool, &str) {
         Some(rest) => (true, rest),
         None => (false, s),
     }
+}
+
+/// Append a `callsign NOT IN (...)` clause for every entry in `ignore`.
+///
+/// Each callsign is sanitised through [`sanitise_callsign`] before embedding.
+/// Does nothing when `ignore` is empty.
+fn append_ignore_callsigns(sql: &mut String, ignore: &[String]) {
+    if ignore.is_empty() {
+        return;
+    }
+    let list: Vec<String> = ignore
+        .iter()
+        .map(|cs| format!("'{}'", sanitise_callsign(cs)))
+        .collect();
+    sql.push_str(&format!(" AND upper(callsign) NOT IN ({})", list.join(", ")));
 }
 
 /// Append callsign, grid, band, SNR, and power WHERE clauses to `sql`.
