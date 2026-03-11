@@ -199,6 +199,13 @@ async fn sse_handler(
     let mut rx = tx.subscribe();
 
     let s = stream! {
+        // Emit the build version immediately on connect.  The WASM client
+        // compares this to its own compiled-in version and reloads the page
+        // if they differ, ensuring users always run the current frontend after
+        // a backend redeployment.
+        const BUILD_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "+", env!("GIT_SHA"));
+        yield Ok(Event::default().event("version").data(BUILD_VERSION));
+
         loop {
             match rx.recv().await {
                 Ok(json) => {

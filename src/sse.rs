@@ -22,6 +22,9 @@ impl SseHandle {
 ///
 /// * `url`        — SSE endpoint, e.g. `"/api/stream"`
 /// * `on_open`    — called once when the connection is successfully established
+/// * `on_version` — called with the version string from each `event: version` message;
+///                  the caller is responsible for comparing it to the client build and
+///                  triggering a reload if they differ
 /// * `on_spots`   — called with the raw JSON string for each `event: spots` message
 /// * `on_error`   — called when the browser reports a connection failure
 ///
@@ -32,6 +35,7 @@ impl SseHandle {
 pub fn start_sse(
     url: &str,
     on_open: impl Fn() + 'static,
+    on_version: impl Fn(String) + 'static,
     on_spots: impl Fn(String) + 'static,
     on_error: impl Fn() + 'static,
 ) -> SseHandle {
@@ -51,6 +55,20 @@ pub fn start_sse(
         .add_event_listener_with_callback("open", open_cb.as_ref().unchecked_ref())
         .expect("add_event_listener (open) should not fail");
     open_cb.forget();
+
+    // `event: version` is emitted once by the server immediately on connect.
+    // The data is a `"{pkg_version}+{git_sha}"` string.
+    let version_cb = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(
+        move |ev: web_sys::MessageEvent| {
+            if let Some(data) = ev.data().as_string() {
+                on_version(data);
+            }
+        },
+    );
+    source
+        .add_event_listener_with_callback("version", version_cb.as_ref().unchecked_ref())
+        .expect("add_event_listener (version) should not fail");
+    version_cb.forget();
 
     // Named `event: spots` messages carry a JSON array of MapSpot objects.
     let spots_cb = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(

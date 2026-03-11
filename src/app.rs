@@ -247,6 +247,22 @@ fn HomePage() -> impl IntoView {
                             reconnect_attempt.set(0);
                             live_state.set(LiveState::Connected);
                         },
+                        // on_version: compare server build to this client's compiled-in
+                        // version; reload the page if they differ so users always run
+                        // the current frontend after a backend redeployment.
+                        move |server_version| {
+                            const CLIENT_VERSION: &str =
+                                concat!(env!("CARGO_PKG_VERSION"), "+", env!("GIT_SHA"));
+                            if server_version != CLIENT_VERSION {
+                                leptos::logging::log!(
+                                    "Backend version {server_version} != client version \
+                                     {CLIENT_VERSION}; reloading"
+                                );
+                                let window = web_sys::window()
+                                    .expect("should always have a Window in WASM");
+                                let _ = window.location().reload();
+                            }
+                        },
                         // on_spots: new data arrived → refresh all resources
                         move |_json| {
                             map_spots_resource.refetch();
