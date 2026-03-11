@@ -12,7 +12,6 @@
 /// |--------------------|--------------------------------|-----------|
 /// | `get_public_config`| `()`                           | 5 minutes |
 /// | `get_stats`        | `(since_rounded, until_rounded)`| 60 seconds |
-/// | `get_band_counts`  | `since_rounded`                | 60 seconds |
 /// | `get_map_spots`    | `SpotFilter` (normalised)      | 60 seconds |
 /// | `get_spots`        | `SpotFilter` (normalised)      | 60 seconds |
 ///
@@ -27,7 +26,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::RwLock;
 
-use crate::models::{BandInfo, MapSpot, PublicConfig, SpotFilter, SpotStats, WsprSpot};
+use crate::models::{MapSpot, PublicConfig, SpotFilter, SpotStats, WsprSpot};
 
 // ---------------------------------------------------------------------------
 // Generic TTL cache
@@ -90,9 +89,6 @@ pub struct QueryCache {
     /// Cache for `get_stats(since, until)`.  Key timestamps are rounded to the
     /// nearest 60 seconds before lookup.  TTL: 60 seconds.
     pub stats: TtlCache<(i64, i64), SpotStats>,
-    /// Cache for `get_band_counts(since)`.  Key rounded to nearest 60 s.
-    /// TTL: 60 seconds.
-    pub band_counts: TtlCache<i64, Vec<BandInfo>>,
     /// Cache for `get_map_spots(filter)`.  Key is a timestamp-normalised clone
     /// of the `SpotFilter`.  TTL: 60 seconds.
     pub map_spots: TtlCache<SpotFilter, Vec<MapSpot>>,
@@ -107,7 +103,6 @@ impl QueryCache {
         Self {
             config: TtlCache::new(Duration::from_secs(300)),
             stats: TtlCache::new(Duration::from_secs(60)),
-            band_counts: TtlCache::new(Duration::from_secs(60)),
             map_spots: TtlCache::new(Duration::from_secs(60)),
             spots: TtlCache::new(Duration::from_secs(60)),
         }

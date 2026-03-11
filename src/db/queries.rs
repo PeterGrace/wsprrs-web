@@ -16,12 +16,8 @@ use anyhow::Context;
 
 use crate::models::{
     filter::SpotFilter,
-    spot::{
-        BandInfo, FreqCountRow, MapSpot, MapSpotRow, SpotStats, SpotStatsRow, WsprSpot,
-        WsprSpotRow,
-    },
+    spot::{MapSpot, MapSpotRow, SpotStats, SpotStatsRow, WsprSpot, WsprSpotRow},
 };
-use crate::models::grid::{find_band, wspr_bands};
 
 /// Single-column row used for the callsign autocomplete query.
 #[derive(Debug, clickhouse::Row, serde::Deserialize)]
@@ -199,64 +195,6 @@ pub async fn query_stats(
             oldest_unix: 0,
             newest_unix: 0,
         }))
-}
-
-/// Return per-band spot counts for the given time window.
-///
-/// Frequencies are bucketed to the nearest standard WSPR band using the
-/// same ±10 kHz tolerance as [`find_band`].
-///
-/// # Arguments
-///
-/// * `ignore_callsigns` — server-configured callsigns to exclude from counts
-pub async fn query_band_counts(
-    client: &clickhouse::Client,
-    table: &str,
-    since_unix: i64,
-    ignore_callsigns: &[String],
-) -> anyhow::Result<Vec<BandInfo>> {
-    // Round to nearest 1 kHz to collapse the ~200 Hz WSPR signal spread, then
-    // count per rounded frequency.
-    let mut sql = format!(
-        "SELECT toFloat64(round(freq_hz / 1000) * 1000) AS freq_hz, count() AS cnt \
-         FROM {table} \
-         WHERE window_start_unix >= {since_unix}"
-    );
-    append_ignore_callsigns(&mut sql, ignore_callsigns);
-    sql.push_str(" GROUP BY freq_hz ORDER BY freq_hz");
-
-    let rows: Vec<FreqCountRow> = client
-        .query(&sql)
-        .fetch_all()
-        .await
-        .context("band counts query")?;
-
-    // Accumulate counts into the standard band buckets.
-    let mut counts: std::collections::HashMap<&'static str, u64> =
-        std::collections::HashMap::new();
-    for row in rows {
-        if let Some(band) = find_band(row.freq_hz) {
-            *counts.entry(band.name).or_insert(0) += row.cnt;
-        }
-    }
-
-    // Return results in the canonical band order defined in wspr_bands(), but
-    // only include bands that have at least one spot.
-    Ok(wspr_bands()
-        .iter()
-        .filter_map(|b| {
-            let count = *counts.get(b.name).unwrap_or(&0);
-            if count == 0 {
-                return None;
-            }
-            Some(BandInfo {
-                name: b.name.to_string(),
-                dial_hz: b.dial_hz,
-                color: b.color.to_string(),
-                spot_count: count,
-            })
-        })
-        .collect())
 }
 
 /// Return up to 20 callsigns that start with `prefix` (case-insensitive).

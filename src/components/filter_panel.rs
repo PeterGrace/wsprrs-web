@@ -125,7 +125,7 @@ pub fn FilterPanel(
                                     value=band.dial_hz.to_string()
                                     selected=selected
                                 >
-                                    {format!("{} ({} spots)", band.name, band.spot_count)}
+                                    {band.name.clone()}
                                 </option>
                             }
                         }

@@ -8,9 +8,7 @@ use leptos_router::{
 use crate::components::{FilterPanel, LiveBadge, SpotTable, StatsBar, WorldMap};
 use crate::components::live_badge::LiveState;
 use crate::models::SpotFilter;
-use crate::server_fns::{
-    get_band_counts, get_map_spots, get_public_config, get_spots, get_stats,
-};
+use crate::server_fns::{get_map_spots, get_public_config, get_spots, get_stats};
 
 // ---------------------------------------------------------------------------
 // HTML shell
@@ -113,12 +111,6 @@ fn HomePage() -> impl IntoView {
         get_stats(since.unwrap_or(now - 3600), until.unwrap_or(now))
     });
 
-    let bands_resource = LocalResource::new(move || {
-        let since = debounced_filter.with(|f| f.since_unix);
-        let now = chrono::Utc::now().timestamp();
-        get_band_counts(since.unwrap_or(now - 3600))
-    });
-
     // -----------------------------------------------------------------------
     // Derived signals from resources
     // -----------------------------------------------------------------------
@@ -147,7 +139,11 @@ fn HomePage() -> impl IntoView {
     });
 
     let bands_signal = Signal::derive(move || {
-        bands_resource.get().and_then(|r| r.ok()).unwrap_or_default()
+        config_resource
+            .get()
+            .and_then(|r| r.ok())
+            .map(|c| c.bands)
+            .unwrap_or_default()
     });
 
     // Spots list for the table (defaults to empty while loading).
@@ -170,7 +166,6 @@ fn HomePage() -> impl IntoView {
         map_spots_resource.refetch();
         spots_resource.refetch();
         stats_resource.refetch();
-        bands_resource.refetch();
     });
 
     let on_live_toggle = Callback::new(move |enabled: bool| {
@@ -257,7 +252,6 @@ fn HomePage() -> impl IntoView {
                             map_spots_resource.refetch();
                             spots_resource.refetch();
                             stats_resource.refetch();
-                            bands_resource.refetch();
                         },
                         // on_error: connection lost → schedule reconnect with
                         // exponential backoff, or give up after MAX_RECONNECT_ATTEMPTS.

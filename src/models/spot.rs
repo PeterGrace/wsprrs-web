@@ -93,7 +93,7 @@ pub struct SpotStats {
     pub newest_unix: i64,
 }
 
-/// Per-band summary returned by the bands API endpoint.
+/// Per-band descriptor used to populate the band filter dropdown and map legend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BandInfo {
     /// Band name, e.g. `"20m"`.
@@ -102,8 +102,6 @@ pub struct BandInfo {
     pub dial_hz: u64,
     /// Map-marker CSS colour for this band.
     pub color: String,
-    /// Number of spots on this band in the queried time window.
-    pub spot_count: u64,
 }
 
 /// Public server configuration forwarded to the browser.
@@ -144,7 +142,6 @@ impl PublicConfig {
                 name: b.name.to_string(),
                 dial_hz: b.dial_hz,
                 color: b.color.to_string(),
-                spot_count: 0,
             })
             .collect();
 
@@ -271,14 +268,6 @@ impl From<SpotStatsRow> for SpotStats {
             newest_unix: r.newest_unix,
         }
     }
-}
-
-/// Row type used when counting spots per frequency bucket.
-#[cfg(feature = "ssr")]
-#[derive(Debug, clickhouse::Row, serde::Deserialize)]
-pub struct FreqCountRow {
-    pub freq_hz: f64,
-    pub cnt: u64,
 }
 
 // ---------------------------------------------------------------------------

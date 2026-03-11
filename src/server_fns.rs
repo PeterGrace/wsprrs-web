@@ -7,7 +7,7 @@
 /// `leptos_routes_with_context`.
 use leptos::prelude::*;
 
-use crate::models::{BandInfo, MapSpot, PublicConfig, SpotFilter, SpotStats, WsprSpot};
+use crate::models::{MapSpot, PublicConfig, SpotFilter, SpotStats, WsprSpot};
 
 // ---------------------------------------------------------------------------
 // Server function: public configuration
@@ -24,7 +24,6 @@ pub async fn get_public_config() -> Result<PublicConfig, ServerFnError> {
 
     use crate::cache::SharedQueryCache;
     use crate::config::Config;
-    use crate::db::queries;
 
     let cache = expect_context::<SharedQueryCache>();
 
@@ -33,21 +32,8 @@ pub async fn get_public_config() -> Result<PublicConfig, ServerFnError> {
     }
 
     let config = expect_context::<Arc<Config>>();
-    let client = expect_context::<clickhouse::Client>();
 
-    let since = chrono::Utc::now().timestamp()
-        - config.time_window_hours as i64 * 3600;
-
-    let bands = queries::query_band_counts(&client, &config.clickhouse_table, since, &config.ignore_callsigns)
-        .await
-        .unwrap_or_else(|e| {
-            tracing::error!("get_public_config band_counts query failed: {e:#}");
-            vec![]
-        });
-
-    let mut cfg =
-        PublicConfig::new_without_counts(config.my_grid.clone(), config.time_window_hours);
-    cfg.bands = bands;
+    let cfg = PublicConfig::new_without_counts(config.my_grid.clone(), config.time_window_hours);
 
     cache.config.set((), cfg.clone()).await;
     Ok(cfg)
@@ -227,42 +213,6 @@ pub async fn get_stats(since_unix: i64, until_unix: i64) -> Result<SpotStats, Se
 
 // ---------------------------------------------------------------------------
 // Server function: per-band counts
-// ---------------------------------------------------------------------------
-
-/// Return the list of active bands and their spot counts since `since_unix`.
-/// Results are cached for 30 seconds keyed on the timestamp rounded to the
-/// nearest minute.
-#[server]
-pub async fn get_band_counts(since_unix: i64) -> Result<Vec<BandInfo>, ServerFnError> {
-    use std::sync::Arc;
-
-    use crate::cache::SharedQueryCache;
-    use crate::config::Config;
-    use crate::db::queries;
-
-    let cache = expect_context::<SharedQueryCache>();
-    let cache_key = crate::cache::QueryCache::round_ts(since_unix);
-
-    if let Some(cached) = cache.band_counts.get(&cache_key).await {
-        return Ok(cached);
-    }
-
-    let config = expect_context::<Arc<Config>>();
-    let client = expect_context::<clickhouse::Client>();
-
-    let result: Vec<BandInfo> =
-        match queries::query_band_counts(&client, &config.clickhouse_table, since_unix, &config.ignore_callsigns).await {
-            Ok(b) => b,
-            Err(e) => {
-                tracing::error!("get_band_counts query failed: {e:#}");
-                return Err(ServerFnError::ServerError(e.to_string()));
-            }
-        };
-
-    cache.band_counts.set(cache_key, result.clone()).await;
-    Ok(result)
-}
-
 // ---------------------------------------------------------------------------
 // Server function: callsign autocomplete
 // ---------------------------------------------------------------------------
