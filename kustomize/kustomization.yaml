@@ -3,7 +3,7 @@ kind: Kustomization
 images:
   - name: IMAGE:TAG
     newName: r.gfpd.us/library/wsprrs-web
-    newTag: v0.1.7
+    newTag: v0.1.8
 
 generatorOptions:
   disableNameSuffixHash: true

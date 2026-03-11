@@ -146,6 +146,16 @@ fn HomePage() -> impl IntoView {
             .unwrap_or_default()
     });
 
+    // Expose the server's configured time window (in seconds) to FilterPanel
+    // so the dropdown default matches WSPR_TIME_WINDOW_HOURS.  Returns None
+    // until the config resource resolves.
+    let default_window_secs: Signal<Option<i64>> = Signal::derive(move || {
+        config_resource
+            .get()
+            .and_then(|r| r.ok())
+            .map(|c| c.time_window_hours as i64 * 3600)
+    });
+
     // Spots list for the table (defaults to empty while loading).
     let table_spots = Signal::derive(move || {
         spots_resource.get().and_then(|r| r.ok()).unwrap_or_default()
@@ -351,6 +361,7 @@ fn HomePage() -> impl IntoView {
                     on_live_toggle=on_live_toggle
                     live=live_bool
                     grid_overlay=grid_overlay
+                    default_window_secs=default_window_secs
                 />
 
                 <div id="content-area">

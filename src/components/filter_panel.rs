@@ -8,6 +8,9 @@ use leptos::prelude::*;
 
 use crate::models::{BandInfo, SpotFilter};
 
+// Used as the fallback before the server config resolves.
+const DEFAULT_WINDOW_SECS_FALLBACK: i64 = 3_600;
+
 /// Predefined relative time windows shown in the time selector.
 ///
 /// Each tuple is `(label, seconds_back)`.
@@ -21,9 +24,6 @@ const TIME_WINDOWS: &[(&str, i64)] = &[
     ("48 hours", 172_800),
     ("7 days",   604_800),
 ];
-
-/// Default time window in seconds (1 hour).
-const DEFAULT_WINDOW_SECS: i64 = 3_600;
 
 #[component]
 pub fn FilterPanel(
@@ -39,6 +39,10 @@ pub fn FilterPanel(
     live: Signal<bool>,
     /// Whether the Maidenhead grid overlay is enabled on the map.
     grid_overlay: RwSignal<bool>,
+    /// Server-configured default time window in seconds (derived from
+    /// `WSPR_TIME_WINDOW_HOURS`).  `None` while the config is still loading;
+    /// applied once on first resolution and used by the Reset button.
+    default_window_secs: Signal<Option<i64>>,
 ) -> impl IntoView {
     // -----------------------------------------------------------------------
     // Local state
@@ -46,7 +50,26 @@ pub fn FilterPanel(
 
     // Tracks which relative window (seconds) is currently selected so the
     // `<select>` can reflect the correct option after a Reset.
-    let window_secs: RwSignal<i64> = RwSignal::new(DEFAULT_WINDOW_SECS);
+    let window_secs: RwSignal<i64> = RwSignal::new(DEFAULT_WINDOW_SECS_FALLBACK);
+
+    // Guard so we only apply the server default once (on first resolution).
+    let config_applied = RwSignal::new(false);
+
+    // When the server config resolves for the first time, snap the dropdown
+    // and the filter's `since_unix` to the server-configured window.
+    Effect::new(move |_| {
+        if let Some(secs) = default_window_secs.get() {
+            if !config_applied.get_untracked() {
+                config_applied.set(true);
+                window_secs.set(secs);
+                let now = chrono::Utc::now().timestamp();
+                filter.update(|f| {
+                    f.since_unix = Some(now - secs);
+                    f.until_unix = None;
+                });
+            }
+        }
+    });
 
     // -----------------------------------------------------------------------
     // Derived readable signals for individual filter fields
@@ -243,8 +266,16 @@ pub fn FilterPanel(
                 <button
                     class="btn btn--secondary"
                     on:click=move |_| {
-                        window_secs.set(DEFAULT_WINDOW_SECS);
-                        filter.set(SpotFilter::default());
+                        // Reset to the server-configured window, falling back
+                        // to 1 hour if config has not yet resolved.
+                        let secs = default_window_secs
+                            .get_untracked()
+                            .unwrap_or(DEFAULT_WINDOW_SECS_FALLBACK);
+                        window_secs.set(secs);
+                        let now = chrono::Utc::now().timestamp();
+                        let mut f = SpotFilter::default();
+                        f.since_unix = Some(now - secs);
+                        filter.set(f);
                     }
                 >
                     "Reset"
