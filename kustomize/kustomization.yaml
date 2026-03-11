@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+images:
+  - name: IMAGE:TAG
+    newName: r.gfpd.us/library/wsprrs-web
+    newTag: dev
+
+generatorOptions:
+  disableNameSuffixHash: true
+configMapGenerator:
+  - name: wsprrs-web-env
+    envs:
+      - env
+
+resources:
+- deployment.yaml
+- ingress.yaml
+- ns.yaml
+- service.yaml

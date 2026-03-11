@@ -41,7 +41,10 @@ pub async fn get_public_config() -> Result<PublicConfig, ServerFnError> {
 
     let bands = queries::query_band_counts(&client, &config.clickhouse_table, since)
         .await
-        .unwrap_or_default();
+        .unwrap_or_else(|e| {
+            tracing::error!("get_public_config band_counts query failed: {e:#}");
+            vec![]
+        });
 
     let mut cfg =
         PublicConfig::new_without_counts(config.my_grid.clone(), config.time_window_hours);
@@ -83,7 +86,10 @@ pub async fn get_map_spots(filter: SpotFilter) -> Result<Vec<MapSpot>, ServerFnE
     .await
     {
         Ok(s) => s,
-        Err(e) => return Err(ServerFnError::ServerError(e.to_string())),
+        Err(e) => {
+            tracing::error!("get_map_spots query failed: {e:#}");
+            return Err(ServerFnError::ServerError(e.to_string()));
+        }
     };
 
     if let Some(home) = home {
@@ -124,7 +130,10 @@ pub async fn get_spots(filter: SpotFilter) -> Result<Vec<WsprSpot>, ServerFnErro
     .await
     {
         Ok(s) => s,
-        Err(e) => return Err(ServerFnError::ServerError(e.to_string())),
+        Err(e) => {
+            tracing::error!("get_spots query failed: {e:#}");
+            return Err(ServerFnError::ServerError(e.to_string()));
+        }
     };
 
     if let Some(home) = home {
@@ -178,7 +187,10 @@ pub async fn get_stats(since_unix: i64, until_unix: i64) -> Result<SpotStats, Se
     .await
     {
         Ok(s) => s,
-        Err(e) => return Err(ServerFnError::ServerError(e.to_string())),
+        Err(e) => {
+            tracing::error!("get_stats query failed: {e:#}");
+            return Err(ServerFnError::ServerError(e.to_string()));
+        }
     };
 
     cache.stats.set(cache_key, result.clone()).await;
@@ -213,7 +225,10 @@ pub async fn get_band_counts(since_unix: i64) -> Result<Vec<BandInfo>, ServerFnE
     let result: Vec<BandInfo> =
         match queries::query_band_counts(&client, &config.clickhouse_table, since_unix).await {
             Ok(b) => b,
-            Err(e) => return Err(ServerFnError::ServerError(e.to_string())),
+            Err(e) => {
+                tracing::error!("get_band_counts query failed: {e:#}");
+                return Err(ServerFnError::ServerError(e.to_string()));
+            }
         };
 
     cache.band_counts.set(cache_key, result.clone()).await;
@@ -239,5 +254,8 @@ pub async fn get_callsign_suggestions(
 
     queries::query_callsign_suggestions(&client, &config.clickhouse_table, &prefix)
         .await
-        .map_err(|e| ServerFnError::ServerError(e.to_string()))
+        .map_err(|e| {
+            tracing::error!("get_callsign_suggestions query failed: {e:#}");
+            ServerFnError::ServerError(e.to_string())
+        })
 }

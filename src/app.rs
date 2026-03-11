@@ -81,7 +81,9 @@ fn HomePage() -> impl IntoView {
     // Grid selected by clicking a spot table row — drives map highlight.
     let selected_grid: RwSignal<Option<String>> = RwSignal::new(None);
     // Live-stream badge state.
-    let live_state = RwSignal::new(LiveState::Off);
+    let live_state = RwSignal::new(LiveState::Connecting);
+    // Whether the Maidenhead grid overlay is drawn on the map.
+    let grid_overlay: RwSignal<bool> = RwSignal::new(false);
 
     // -----------------------------------------------------------------------
     // Server resources
@@ -234,6 +236,7 @@ fn HomePage() -> impl IntoView {
                     on_refresh=on_refresh
                     on_live_toggle=on_live_toggle
                     live=live_bool
+                    grid_overlay=grid_overlay
                 />
 
                 <div id="content-area">
@@ -241,6 +244,7 @@ fn HomePage() -> impl IntoView {
                         spots_json=spots_json
                         config_json=config_json
                         selected_grid=selected_grid_signal
+                        grid_overlay=Signal::derive(move || grid_overlay.get())
                     />
 
                     <SpotTable

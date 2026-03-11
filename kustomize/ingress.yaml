@@ -1,0 +1,26 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  annotations:
+    app.kubernetes.io/name: wsprrs
+    app.kubernetes.io/component: web
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  name: wsprrs-web
+  namespace: wsprrs
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: wspr.k.vsix.me
+    http:
+      paths:
+      - backend:
+          service:
+            name: wsprrs-web
+            port:
+              number: 3000
+        path: /
+        pathType: Prefix
+  tls:
+  - hosts:
+    - wspr.k.vsix.me
+    secretName: wsprrs-tls

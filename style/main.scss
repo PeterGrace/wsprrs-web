@@ -346,6 +346,28 @@ body {
   background: var(--bg-2);
 }
 
+// Maidenhead grid overlay labels (placed at cell centres by Leaflet DivIcon)
+.grid-label {
+  // Centre the text on the icon anchor point.
+  display: inline-block;
+  transform: translate(-50%, -50%);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;     // 10px — small enough not to clutter at low zoom
+  font-weight: 600;
+  color: var(--accent);
+  background: rgba(10, 14, 20, 0.55);  // --bg-0 at 55% opacity
+  padding: 1px 3px;
+  border-radius: 2px;
+  white-space: nowrap;
+  pointer-events: none;    // labels must never capture mouse/touch events
+  user-select: none;
+}
+
+[data-theme="light"] .grid-label {
+  color: var(--accent);
+  background: rgba(246, 248, 250, 0.65);
+}
+
 // Grid-square cluster markers (DivIcon rendered when zoom is too low to
 // show individual stations distinctly)
 .grid-cluster {

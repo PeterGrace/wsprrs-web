@@ -37,6 +37,8 @@ pub fn FilterPanel(
     on_live_toggle: Callback<bool>,
     /// Current live-stream state.
     live: Signal<bool>,
+    /// Whether the Maidenhead grid overlay is enabled on the map.
+    grid_overlay: RwSignal<bool>,
 ) -> impl IntoView {
     // -----------------------------------------------------------------------
     // Local state
@@ -202,6 +204,23 @@ pub fn FilterPanel(
                         }
                     />
                     " Grid spots only"
+                </label>
+            </div>
+
+            // --- Map display section ---
+            <h2 class="panel-title" style="margin-top:0.5rem">"Map"</h2>
+
+            // --- Maidenhead grid overlay ---
+            <div class="filter-group filter-group--check">
+                <label>
+                    <input
+                        type="checkbox"
+                        checked=move || grid_overlay.get()
+                        on:change=move |ev| {
+                            grid_overlay.set(event_target_checked(&ev));
+                        }
+                    />
+                    " Maidenhead grid"
                 </label>
             </div>
 

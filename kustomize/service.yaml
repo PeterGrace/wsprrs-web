@@ -1,0 +1,18 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wsprrs-web
+  namespace: wsprrs
+  labels:
+    app.kubernetes.io/name: wsprrs
+    app.kubernetes.io/component: web
+spec:
+  ports:
+  - name: http
+    port: 3000
+    targetPort: 3000
+  selector:
+    app.kubernetes.io/name: wsprrs
+    app.kubernetes.io/component: web
+  type: ClusterIP

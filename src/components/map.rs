@@ -13,6 +13,7 @@
 ///   band palette).
 /// * `selected_grid` — reactive `Option<String>` — when `Some`, the JS layer
 ///   highlights the marker(s) for that grid.
+/// * `grid_overlay`  — when `true`, the Maidenhead grid overlay is shown.
 use leptos::prelude::*;
 
 #[component]
@@ -24,6 +25,9 @@ pub fn WorldMap(
     /// When `Some(grid)`, ask Leaflet to highlight that grid's marker(s).
     #[prop(optional)]
     selected_grid: Option<Signal<Option<String>>>,
+    /// Whether the Maidenhead grid overlay should be drawn on the map.
+    #[prop(optional, default = Signal::derive(|| false))]
+    grid_overlay: Signal<bool>,
 ) -> impl IntoView {
     // -----------------------------------------------------------------------
     // Client-side effects: drive the Leaflet map from Rust signals
@@ -46,6 +50,13 @@ pub fn WorldMap(
         let _spts = spots_json.get();
         #[cfg(feature = "hydrate")]
         call_js_update_map(&_spts);
+    });
+
+    // Toggle the Maidenhead grid overlay whenever the signal changes.
+    Effect::new(move |_| {
+        let _enabled = grid_overlay.get();
+        #[cfg(feature = "hydrate")]
+        call_js_set_grid_overlay(_enabled);
     });
 
     // Highlight a specific grid square when the user clicks a table row.
@@ -148,6 +159,39 @@ fn call_js_update_map(spots_json: &str) {
 
     if let Err(e) = update_fn.call1(&wspr_map, &JsValue::from_str(spots_json)) {
         web_sys::console::error_2(&JsValue::from_str("wsprMap.update() threw:"), &e);
+    }
+}
+
+/// Call `window.wsprMap.setGridOverlay(enabled)` to show or hide the
+/// Maidenhead grid overlay.
+///
+/// This mirrors the Leaflet layer-control toggle so both the sidebar checkbox
+/// and the in-map layer picker stay in sync.
+#[cfg(feature = "hydrate")]
+fn call_js_set_grid_overlay(enabled: bool) {
+    use js_sys::{Function, Reflect};
+    use wasm_bindgen::JsValue;
+
+    let wspr_map = match js_wspr_map() {
+        Some(v) => v,
+        None => return,
+    };
+
+    let set_fn = match Reflect::get(&wspr_map, &JsValue::from_str("setGridOverlay"))
+        .ok()
+        .and_then(|v| v.dyn_into::<Function>().ok())
+    {
+        Some(f) => f,
+        None => {
+            web_sys::console::error_1(
+                &JsValue::from_str("wsprMap: window.wsprMap.setGridOverlay is not a function"),
+            );
+            return;
+        }
+    };
+
+    if let Err(e) = set_fn.call1(&wspr_map, &JsValue::from_bool(enabled)) {
+        web_sys::console::error_2(&JsValue::from_str("wsprMap.setGridOverlay() threw:"), &e);
     }
 }
 
