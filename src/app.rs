@@ -223,6 +223,9 @@ fn HomePage() -> impl IntoView {
                 <div class="header-left">
                     <h1 class="app-title">"WSPR Visualizer"</h1>
                     <LiveBadge state=live_signal/>
+                    <span class="app-version">
+                        {concat!("v", env!("CARGO_PKG_VERSION"), "+", env!("GIT_SHA"))}
+                    </span>
                 </div>
                 <div class="header-right">
                     <StatsBar stats=stats_signal/>

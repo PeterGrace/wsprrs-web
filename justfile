@@ -7,6 +7,8 @@ tag := `git describe --tags|| echo dev`
 
 all: make-image
 
+patchbuild: release-patch make-image
+
 make-image:
   docker buildx build --push --platform linux/amd64 \
   -t {{registry}}/{{image}}:latest \
@@ -15,3 +17,9 @@ make-image:
   -t {{registry}}/{{image}}:{{tag}} \
   .
 
+release-patch:
+  cargo release --no-publish --no-verify patch --execute
+release-minor:
+  cargo release --no-publish --no-verify minor --execute
+release-major:
+  cargo release --no-publish --no-verify minor --execute

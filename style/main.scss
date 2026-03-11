@@ -134,6 +134,15 @@ body {
   text-shadow: var(--accent-glow);
 }
 
+.app-version {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  opacity: 0.55;
+  letter-spacing: 0.04em;
+  user-select: all;
+}
+
 // --- Main content row ---
 #main-content {
   display: flex;
