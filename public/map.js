@@ -686,6 +686,7 @@
         map = L.map("map", {
           center: [20, 0],
           zoom: 2,
+          minZoom: 2,
           zoomControl: true,
           attributionControl: true,
         });
