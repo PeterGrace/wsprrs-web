@@ -1,7 +1,7 @@
 /// Paginated, sortable WSPR spot table.
 ///
-/// Clicking a row emits the row's grid square via `on_row_select` so the
-/// `WorldMap` can highlight the corresponding marker.
+/// Clicking a row emits `(grid, callsign)` via `on_row_select` so the
+/// `WorldMap` can highlight the exact marker for the selected station.
 use leptos::prelude::*;
 
 use crate::models::WsprSpot;
@@ -10,8 +10,9 @@ use crate::models::WsprSpot;
 pub fn SpotTable(
     /// Spot records to display.
     spots: Signal<Vec<WsprSpot>>,
-    /// Emitted with the selected row's grid string when the user clicks a row.
-    on_row_select: Callback<Option<String>>,
+    /// Emitted with `(grid, callsign)` when the user clicks a row, or `None`
+    /// when the row has no grid information.
+    on_row_select: Callback<Option<(String, String)>>,
 ) -> impl IntoView {
     // Track the selected row by its unique (timestamp, callsign) key.
     let selected_key: RwSignal<Option<(i64, String)>> = RwSignal::new(None);
@@ -65,7 +66,10 @@ pub fn SpotTable(
                                         move || selected_key.get().as_ref() == Some(&key)
                                     };
                                     let click_key = row_key.clone();
-                                    let click_grid = grid_opt.clone();
+                                    // Pair the grid with the callsign so the map can open the
+                                    // exact marker rather than any marker in the same grid square.
+                                    let click_selection = grid_opt
+                                        .map(|g| (g, spot.callsign.clone()));
 
                                     view! {
                                         <tr
@@ -74,7 +78,7 @@ pub fn SpotTable(
                                             }
                                             on:click=move |_| {
                                                 selected_key.set(Some(click_key.clone()));
-                                                on_row_select.run(click_grid.clone());
+                                                on_row_select.run(click_selection.clone());
                                             }
                                         >
                                             <td class="mono">{spot.time_utc.clone()}</td>

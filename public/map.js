@@ -546,6 +546,7 @@
       weight: 1.5,
       opacity: 0.9,
       _grid: spot.grid,
+      _callsign: spot.callsign,
       _isCluster: false,
       _bandColor: color,
     });
@@ -775,14 +776,20 @@
     },
 
     /**
-     * Bring all markers for a specific grid square to the foreground and open
-     * their popups.  Works for both cluster and individual markers.
+     * Zoom to a specific grid square and open the popup for the given callsign.
      *
-     * @param {string} grid - Maidenhead grid square, e.g. "FN20"
+     * For individual (expanded) markers, only the marker whose `_callsign`
+     * matches is opened, preventing co-located stations in the same grid from
+     * showing the wrong popup.  Cluster markers are always opened when no
+     * individual match exists (e.g. when the grid is still collapsed).
+     *
+     * @param {string} grid     - Maidenhead grid square, e.g. "FN20"
+     * @param {string} callsign - Exact callsign to highlight, e.g. "W4EO"
      */
-    highlight: function (grid) {
+    highlight: function (grid, callsign) {
       if (!map || !markerLayer) return;
       const upper = grid.toUpperCase().slice(0, 4);
+      const targetCallsign = callsign ? callsign.toUpperCase() : null;
       // Determine centre coordinates from the grid square so we can zoom even
       // when the marker is currently a collapsed cluster.
       const center = gridCenter(upper);
@@ -791,6 +798,13 @@
       markerLayer.eachLayer(function (layer) {
         if (!layer.options || !layer.options._grid) return;
         if (layer.options._grid.toUpperCase().slice(0, 4) !== upper) return;
+        // For individual markers, only open the popup for the matching callsign.
+        // Cluster markers (_isCluster: true) are opened as a fallback when the
+        // grid has not yet expanded to individual markers.
+        if (!layer.options._isCluster && targetCallsign) {
+          if (!layer.options._callsign ||
+              layer.options._callsign.toUpperCase() !== targetCallsign) return;
+        }
         layer.openPopup();
       });
     },

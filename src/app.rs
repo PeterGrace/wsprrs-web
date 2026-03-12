@@ -80,8 +80,10 @@ fn HomePage() -> impl IntoView {
     // All server resources read this signal so rapid keystrokes / slider drags
     // do not fire a ClickHouse query on every event.
     let debounced_filter = RwSignal::new(SpotFilter::default());
-    // Grid selected by clicking a spot table row — drives map highlight.
-    let selected_grid: RwSignal<Option<String>> = RwSignal::new(None);
+    // Grid + callsign selected by clicking a spot table row — drives map highlight.
+    // Stored as (grid, callsign) so the map can open the exact marker rather
+    // than any marker in the same grid square.
+    let selected_grid: RwSignal<Option<(String, String)>> = RwSignal::new(None);
     // Live-stream badge state.
     let live_state = RwSignal::new(LiveState::Connecting);
     // Whether the Maidenhead grid overlay is drawn on the map.
@@ -374,7 +376,9 @@ fn HomePage() -> impl IntoView {
 
                     <SpotTable
                         spots=table_spots
-                        on_row_select=Callback::new(move |g| selected_grid.set(g))
+                        on_row_select=Callback::new(move |g: Option<(String, String)>| {
+                            selected_grid.set(g);
+                        })
                     />
                 </div>
             </div>

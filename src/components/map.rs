@@ -22,9 +22,10 @@ pub fn WorldMap(
     spots_json: Signal<String>,
     /// Serialised `PublicConfig` JSON string (home QTH, band palette).
     config_json: Signal<String>,
-    /// When `Some(grid)`, ask Leaflet to highlight that grid's marker(s).
+    /// When `Some((grid, callsign))`, ask Leaflet to highlight the exact
+    /// marker for that callsign within the given grid square.
     #[prop(optional)]
-    selected_grid: Option<Signal<Option<String>>>,
+    selected_grid: Option<Signal<Option<(String, String)>>>,
     /// Whether the Maidenhead grid overlay should be drawn on the map.
     #[prop(optional, default = Signal::derive(|| false))]
     grid_overlay: Signal<bool>,
@@ -59,12 +60,12 @@ pub fn WorldMap(
         call_js_set_grid_overlay(_enabled);
     });
 
-    // Highlight a specific grid square when the user clicks a table row.
+    // Highlight the specific callsign's marker when the user clicks a table row.
     if let Some(grid_signal) = selected_grid {
         Effect::new(move |_| {
-            if let Some(_grid) = grid_signal.get() {
+            if let Some((_grid, _callsign)) = grid_signal.get() {
                 #[cfg(feature = "hydrate")]
-                call_js_highlight_grid(&_grid);
+                call_js_highlight_grid(&_grid, &_callsign);
             }
         });
     }
@@ -195,9 +196,10 @@ fn call_js_set_grid_overlay(enabled: bool) {
     }
 }
 
-/// Call `window.wsprMap.highlight(grid)` to emphasise a particular grid square.
+/// Call `window.wsprMap.highlight(grid, callsign)` to open the popup for the
+/// specific callsign's marker within the given grid square.
 #[cfg(feature = "hydrate")]
-fn call_js_highlight_grid(grid: &str) {
+fn call_js_highlight_grid(grid: &str, callsign: &str) {
     use js_sys::{Function, Reflect};
     use wasm_bindgen::JsValue;
 
@@ -219,7 +221,11 @@ fn call_js_highlight_grid(grid: &str) {
         }
     };
 
-    if let Err(e) = hl_fn.call1(&wspr_map, &JsValue::from_str(grid)) {
+    if let Err(e) = hl_fn.call2(
+        &wspr_map,
+        &JsValue::from_str(grid),
+        &JsValue::from_str(callsign),
+    ) {
         web_sys::console::error_2(&JsValue::from_str("wsprMap.highlight() threw:"), &e);
     }
 }
