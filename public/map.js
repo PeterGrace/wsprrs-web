@@ -830,7 +830,7 @@
 
       pendingHighlight = openMatchingPopup;
       map.once("moveend", openMatchingPopup);
-      map.setView(L.latLng(center[0], center[1]), targetZoom);
+      map.flyTo(L.latLng(center[0], center[1]), targetZoom);
     },
 
     /**
