@@ -39,6 +39,13 @@ pub struct Config {
     /// Populated from `WSPR_IGNORE_CALLSIGNS` as a comma-separated list,
     /// e.g. `W3POG,N0CALL`.  Empty list disables the filter.
     pub ignore_callsigns: Vec<String>,
+
+    /// Leaflet zoom level applied when the user clicks a table row.
+    ///
+    /// Populated from `WSPR_DETAIL_ZOOM` (default: `10`).  The map will
+    /// `setView` to this zoom level so the selected station's grid is shown at
+    /// a useful street-level detail.
+    pub detail_zoom: u8,
 }
 
 #[cfg(feature = "ssr")]
@@ -81,6 +88,10 @@ impl Config {
                         .collect()
                 })
                 .unwrap_or_default(),
+            detail_zoom: std::env::var("WSPR_DETAIL_ZOOM")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(10),
         })
     }
 

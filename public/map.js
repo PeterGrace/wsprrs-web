@@ -66,6 +66,13 @@
   let currentSpots = [];
 
   /**
+   * Leaflet zoom level applied when the user clicks a table row.
+   * Populated from PublicConfig.detail_zoom during init().
+   * @type {number}
+   */
+  let detailZoom = 10;
+
+  /**
    * Pixel width threshold for a grid square below which spots are collapsed
    * into a single cluster marker.  80 px gives comfortable inter-marker
    * spacing when individual stations are visible.
@@ -678,6 +685,10 @@
       try { config = JSON.parse(configJson); } catch (_) {}
       try { spots  = JSON.parse(spotsJson);  } catch (_) {}
 
+      if (config.detail_zoom != null) {
+        detailZoom = config.detail_zoom;
+      }
+
       if (config.my_lat != null && config.my_lon != null) {
         homeLatLon = [config.my_lat, config.my_lon];
       }
@@ -772,14 +783,15 @@
     highlight: function (grid) {
       if (!map || !markerLayer) return;
       const upper = grid.toUpperCase().slice(0, 4);
+      // Determine centre coordinates from the grid square so we can zoom even
+      // when the marker is currently a collapsed cluster.
+      const center = gridCenter(upper);
+      const targetZoom = Math.max(map.getZoom(), detailZoom);
+      map.setView(L.latLng(center[0], center[1]), targetZoom);
       markerLayer.eachLayer(function (layer) {
         if (!layer.options || !layer.options._grid) return;
         if (layer.options._grid.toUpperCase().slice(0, 4) !== upper) return;
         layer.openPopup();
-        const latlng = layer.getLatLng
-          ? layer.getLatLng()
-          : L.latLng.apply(null, gridCenter(upper));
-        map.panTo(latlng);
       });
     },
 

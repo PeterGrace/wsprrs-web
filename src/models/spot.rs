@@ -121,6 +121,8 @@ pub struct PublicConfig {
     /// Full band palette so the client can render the legend without
     /// duplicating the band definitions.
     pub bands: Vec<BandInfo>,
+    /// Leaflet zoom level to use when a table row is clicked.
+    pub detail_zoom: u8,
 }
 
 impl PublicConfig {
@@ -129,6 +131,7 @@ impl PublicConfig {
     pub fn new_without_counts(
         my_grid: Option<String>,
         time_window_hours: u32,
+        detail_zoom: u8,
     ) -> Self {
         let (my_lat, my_lon) = my_grid
             .as_deref()
@@ -145,7 +148,7 @@ impl PublicConfig {
             })
             .collect();
 
-        Self { my_grid, my_lat, my_lon, time_window_hours, bands }
+        Self { my_grid, my_lat, my_lon, time_window_hours, bands, detail_zoom }
     }
 }
 

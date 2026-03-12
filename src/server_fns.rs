@@ -33,7 +33,11 @@ pub async fn get_public_config() -> Result<PublicConfig, ServerFnError> {
 
     let config = expect_context::<Arc<Config>>();
 
-    let cfg = PublicConfig::new_without_counts(config.my_grid.clone(), config.time_window_hours);
+    let cfg = PublicConfig::new_without_counts(
+        config.my_grid.clone(),
+        config.time_window_hours,
+        config.detail_zoom,
+    );
 
     cache.config.set((), cfg.clone()).await;
     Ok(cfg)
