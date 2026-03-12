@@ -66,6 +66,13 @@
   let currentSpots = [];
 
   /**
+   * Pending highlight callback registered on the map's "moveend" event.
+   * Kept so a rapid second click can cancel the first before it fires.
+   * @type {Function | null}
+   */
+  let pendingHighlight = null;
+
+  /**
    * Leaflet zoom level applied when the user clicks a table row.
    * Populated from PublicConfig.detail_zoom during init().
    * @type {number}
@@ -794,19 +801,36 @@
       // when the marker is currently a collapsed cluster.
       const center = gridCenter(upper);
       const targetZoom = Math.max(map.getZoom(), detailZoom);
+
+      // Cancel any in-flight highlight from a rapid previous click so its
+      // stale moveend listener does not open the wrong popup.
+      if (pendingHighlight) {
+        map.off("moveend", pendingHighlight);
+        pendingHighlight = null;
+      }
+
+      // Defer openPopup() until after the pan/zoom animation completes.
+      // Calling openPopup() while the map is animating causes Leaflet's
+      // _adjustPan to access a null pane reference and throw.
+      function openMatchingPopup() {
+        pendingHighlight = null;
+        markerLayer.eachLayer(function (layer) {
+          if (!layer.options || !layer.options._grid) return;
+          if (layer.options._grid.toUpperCase().slice(0, 4) !== upper) return;
+          // For individual markers, only open the popup for the matching callsign.
+          // Cluster markers (_isCluster: true) are opened as a fallback when the
+          // grid has not yet expanded to individual markers.
+          if (!layer.options._isCluster && targetCallsign) {
+            if (!layer.options._callsign ||
+                layer.options._callsign.toUpperCase() !== targetCallsign) return;
+          }
+          layer.openPopup();
+        });
+      }
+
+      pendingHighlight = openMatchingPopup;
+      map.once("moveend", openMatchingPopup);
       map.setView(L.latLng(center[0], center[1]), targetZoom);
-      markerLayer.eachLayer(function (layer) {
-        if (!layer.options || !layer.options._grid) return;
-        if (layer.options._grid.toUpperCase().slice(0, 4) !== upper) return;
-        // For individual markers, only open the popup for the matching callsign.
-        // Cluster markers (_isCluster: true) are opened as a fallback when the
-        // grid has not yet expanded to individual markers.
-        if (!layer.options._isCluster && targetCallsign) {
-          if (!layer.options._callsign ||
-              layer.options._callsign.toUpperCase() !== targetCallsign) return;
-        }
-        layer.openPopup();
-      });
     },
 
     /**
