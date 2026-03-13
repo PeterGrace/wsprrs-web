@@ -163,18 +163,31 @@
   }
 
   /**
-   * Compute the geographic centre [lat, lon] of a 4-character Maidenhead
+   * Compute the geographic centre [lat, lon] of a 4- or 6-character Maidenhead
    * grid square.
    *
-   * @param {string} grid - 4-character grid locator, e.g. "FN20"
+   * @param {string} grid - 4- or 6-character grid locator, e.g. "FN20" or "FN20eg"
    * @returns {[number, number]} [latitude, longitude] of the cell centre
    */
   function gridCenter(grid) {
     const g = grid.toUpperCase();
     const lonField = (g.charCodeAt(0) - 65) * 20 - 180;
     const latField = (g.charCodeAt(1) - 65) * 10 - 90;
-    const lon = lonField + parseInt(g[2], 10) * 2 + 1.0;
-    const lat = latField + parseInt(g[3], 10) * 1 + 0.5;
+    let lon = lonField + parseInt(g[2], 10) * 2;
+    let lat = latField + parseInt(g[3], 10) * 1;
+
+    if (g.length >= 6) {
+      // Subsquare pair (characters 5-6): letters A-X, each 5' lon x 2.5' lat
+      const ssLon = g.charCodeAt(4) - 65;
+      const ssLat = g.charCodeAt(5) - 65;
+      lon += ssLon * (2.0 / 24.0) + (1.0 / 24.0);
+      lat += ssLat * (1.0 / 24.0) + (0.5 / 24.0);
+    } else {
+      // Centre of the 4-char cell
+      lon += 1.0;
+      lat += 0.5;
+    }
+
     return [lat, lon];
   }
 
