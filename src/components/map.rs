@@ -34,19 +34,25 @@ pub fn WorldMap(
     // Client-side effects: drive the Leaflet map from Rust signals
     // -----------------------------------------------------------------------
 
-    // Initialise the map once the component mounts (config_json available).
-    // We depend on `config_json` so this re-runs if config changes (unlikely
-    // in practice, but safe).
+    // Re-initialise the map (home marker, config) when the config changes.
+    // Spots are read untracked so this effect fires ONLY on config changes,
+    // not on every spot update.  The update effect below handles spot-only
+    // refreshes; reading spots untracked here avoids a redundant double-draw
+    // on every spots change while still passing the current spot set to
+    // `init()` so that the great-circle lines are redrawn at the new QTH.
     let config_for_init = config_json;
     let spots_for_init = spots_json;
     Effect::new(move |_| {
         let _cfg = config_for_init.get();
-        let _spts = spots_for_init.get();
+        // Untracked read: we want the current spots value but must not create
+        // a reactive dependency here (the update effect owns that dependency).
+        let _spts = spots_for_init.get_untracked();
         #[cfg(feature = "hydrate")]
         call_js_init_map(&_cfg, &_spts);
     });
 
-    // Update markers whenever spots change after the initial render.
+    // Update markers whenever spots change (filter change, SSE refresh, etc.).
+    // This is the sole reactive consumer of spots_json changes.
     Effect::new(move |_| {
         let _spts = spots_json.get();
         #[cfg(feature = "hydrate")]

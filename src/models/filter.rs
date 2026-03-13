@@ -21,6 +21,11 @@ pub enum SpotSource {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SpotFilter {
     /// Data source: personal receive data (`Local`) or global network (`Global`).
+    ///
+    /// Defaults to `SpotSource::Local` when the field is absent from
+    /// deserialized JSON (e.g. a request from an older client build that
+    /// predates this field).
+    #[serde(default)]
     pub source: SpotSource,
 
     /// Filter by callsign prefix (case-insensitive, trailing wildcard applied).

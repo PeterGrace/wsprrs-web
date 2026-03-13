@@ -14,6 +14,12 @@ pub struct Config {
     /// ClickHouse table name for personal WSPR spots.
     pub clickhouse_table: String,
 
+    /// ClickHouse database name for the global WSPR spots table.
+    ///
+    /// Populated from `WSPR_GLOBAL_DB`.  When `None`, the global table is
+    /// queried inside `clickhouse_db` (same database as personal spots).
+    pub global_db: Option<String>,
+
     /// ClickHouse table name for global WSPR spots.
     ///
     /// Populated from `WSPR_GLOBAL_TABLE` (default: `"global_spots"`).
@@ -32,12 +38,19 @@ pub struct Config {
     /// How many hours of data to show on initial page load.
     pub time_window_hours: u32,
 
-    /// Default and maximum row limit applied to spot and map-spot queries.
+    /// Default and maximum row limit applied to local spot and map-spot queries.
     ///
     /// Populated from `WSPR_SPOT_LIMIT` (default: `5000`).  Acts as both the
     /// fallback when the caller supplies no limit and the hard cap on any
     /// caller-supplied limit.
     pub spot_limit: u32,
+
+    /// Default and maximum row limit applied to global spot and map-spot queries.
+    ///
+    /// Populated from `WSPR_GLOBAL_SPOT_LIMIT` (default: `10000`).  Kept
+    /// separate from `spot_limit` because the global table is orders of
+    /// magnitude larger and benefits from a higher default cap.
+    pub global_spot_limit: u32,
 
     /// Callsigns excluded from all query results, normalised to uppercase.
     ///
@@ -73,6 +86,7 @@ impl Config {
                 .unwrap_or_else(|_| "wsprrs".to_string()),
             clickhouse_table: std::env::var("WSPR_CLICKHOUSE_TABLE")
                 .unwrap_or_else(|_| "wspr_spots".to_string()),
+            global_db: std::env::var("WSPR_GLOBAL_DB").ok(),
             global_table: std::env::var("WSPR_GLOBAL_TABLE")
                 .unwrap_or_else(|_| "global_spots".to_string()),
             clickhouse_user: std::env::var("WSPR_CLICKHOUSE_USER").ok(),
@@ -86,6 +100,10 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(5_000),
+            global_spot_limit: std::env::var("WSPR_GLOBAL_SPOT_LIMIT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(10_000),
             ignore_callsigns: std::env::var("WSPR_IGNORE_CALLSIGNS")
                 .ok()
                 .map(|v| {
@@ -100,6 +118,19 @@ impl Config {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(10),
         })
+    }
+
+    /// Return the fully-qualified global table identifier.
+    ///
+    /// When `WSPR_GLOBAL_DB` is set this returns `"db.table"`, otherwise just
+    /// `"table"`.  Pass the result wherever a table name is needed in global
+    /// queries so ClickHouse can resolve it even when the client is pointed at
+    /// a different database.
+    pub fn global_table_qualified(&self) -> String {
+        match &self.global_db {
+            Some(db) => format!("{}.{}", db, self.global_table),
+            None => self.global_table.clone(),
+        }
     }
 
     /// Build a `clickhouse::Client` from this configuration.

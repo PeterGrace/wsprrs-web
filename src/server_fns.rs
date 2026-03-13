@@ -274,10 +274,10 @@ pub async fn get_global_map_spots(filter: SpotFilter) -> Result<Vec<MapSpot>, Se
     let mut spots: Vec<MapSpot> = match queries::query_global_map_spots(
         &client,
         &filter,
-        &config.global_table,
+        &config.global_table_qualified(),
         default_since,
         &config.ignore_callsigns,
-        config.spot_limit,
+        config.global_spot_limit,
     )
     .await
     {
@@ -332,10 +332,10 @@ pub async fn get_global_spots(filter: SpotFilter) -> Result<Vec<GlobalSpot>, Ser
     let mut spots: Vec<GlobalSpot> = match queries::query_global_spots(
         &client,
         &filter,
-        &config.global_table,
+        &config.global_table_qualified(),
         default_since,
         &config.ignore_callsigns,
-        config.spot_limit,
+        config.global_spot_limit,
     )
     .await
     {
@@ -379,7 +379,7 @@ pub async fn get_reporter_suggestions(prefix: String) -> Result<Vec<String>, Ser
     let config = expect_context::<Arc<Config>>();
     let client = expect_context::<clickhouse::Client>();
 
-    queries::query_reporter_suggestions(&client, &config.global_table, &prefix)
+    queries::query_reporter_suggestions(&client, &config.global_table_qualified(), &prefix)
         .await
         .map_err(|e| {
             tracing::error!("get_reporter_suggestions query failed: {e:#}");

@@ -218,11 +218,13 @@ fn HomePage() -> impl IntoView {
     });
 
     // Spot list for the table (defaults to empty while loading).
-    let table_spots = Signal::derive(move || {
-        spots_resource
-            .get()
-            .and_then(|r| r.ok())
-            .unwrap_or_default()
+    let table_spots = Signal::derive(move || match spots_resource.get() {
+        Some(Ok(spots)) => spots,
+        Some(Err(e)) => {
+            leptos::logging::error!("spots_resource error: {e:?}");
+            vec![]
+        }
+        None => vec![],
     });
 
     // Whether the current source is global — passed to SpotTable to select

@@ -306,19 +306,27 @@ pub async fn query_global_map_spots(
     spot_limit: u32,
 ) -> anyhow::Result<Vec<MapSpot>> {
     let since = filter.since_unix.unwrap_or(default_since);
-    let until = filter.until_unix.unwrap_or(i64::MAX);
     let limit = filter.limit.unwrap_or(spot_limit).min(spot_limit);
 
+    // Use toInt64() so ClickHouse emits an Int64 column that matches the Rust i64 field.
+    // Without this, toUnixTimestamp() returns UInt32, which the RowBinary deserializer
+    // may reject or misinterpret when the target type is i64.
     let mut sql = format!(
         "SELECT \
-          toUnixTimestamp(timestamp) AS timestamp_unix, \
+          toInt64(toUnixTimestamp(timestamp)) AS timestamp_unix, \
           callsign, grid, reporter, reporter_grid, \
           frequency, snr, power \
          FROM {table} \
          WHERE grid != '' \
-           AND toUnixTimestamp(timestamp) >= {since} \
-           AND toUnixTimestamp(timestamp) <= {until}"
+           AND toUnixTimestamp(timestamp) >= {since}"
     );
+
+    // Only add an upper bound when explicitly requested; omitting it avoids
+    // comparing UInt32 against i64::MAX, which causes type-coercion surprises
+    // in ClickHouse 26.x.
+    if let Some(until) = filter.until_unix {
+        sql.push_str(&format!(" AND toUnixTimestamp(timestamp) <= {until}"));
+    }
 
     append_ignore_callsigns(&mut sql, ignore_callsigns);
     append_reporter_filter(&mut sql, filter);
@@ -328,16 +336,22 @@ pub async fn query_global_map_spots(
         " ORDER BY toUnixTimestamp(timestamp) DESC LIMIT {limit}"
     ));
 
+    tracing::info!(table, since, limit, sql, "global map spots query");
+
     let rows: Vec<GlobalMapSpotRow> = client
         .query(&sql)
         .fetch_all()
         .await
         .context("global map spots query")?;
 
-    Ok(rows
+    let map_spots: Vec<MapSpot> = rows
         .into_iter()
         .filter_map(Option::<MapSpot>::from)
-        .collect())
+        .collect();
+
+    tracing::info!(count = map_spots.len(), "global map spots returned");
+
+    Ok(map_spots)
 }
 
 /// Fetch full spot records from the global spot table.
@@ -355,21 +369,34 @@ pub async fn query_global_spots(
     spot_limit: u32,
 ) -> anyhow::Result<Vec<GlobalSpot>> {
     let since = filter.since_unix.unwrap_or(default_since);
-    let until = filter.until_unix.unwrap_or(i64::MAX);
     let limit = filter.limit.unwrap_or(spot_limit).min(spot_limit);
     let offset = filter.offset.unwrap_or(0);
 
+    // Explicit casts ensure the emitted RowBinaryWithNamesAndTypes column types
+    // match the Rust struct fields regardless of the actual ClickHouse storage
+    // type (which varies across wsprnet schema versions: e.g., Int8 vs Int32
+    // for snr/power/drift/band/code, UInt32 vs UInt64 for spot_id).
     let mut sql = format!(
         "SELECT \
-          spot_id, \
-          toUnixTimestamp(timestamp) AS timestamp_unix, \
-          reporter, reporter_grid, snr, frequency, \
-          callsign, grid, power, drift, distance, azimuth, \
-          band, version, code \
+          toUInt64(spot_id)                       AS spot_id, \
+          toInt64(toUnixTimestamp(timestamp))      AS timestamp_unix, \
+          reporter, reporter_grid, \
+          toInt32(snr)                             AS snr, \
+          frequency, callsign, grid, \
+          toInt32(power)                           AS power, \
+          toInt32(drift)                           AS drift, \
+          toInt32(distance)                        AS distance, \
+          toInt32(azimuth)                         AS azimuth, \
+          toInt32(band)                            AS band, \
+          version, \
+          toInt32(code)                            AS code \
          FROM {table} \
-         WHERE toUnixTimestamp(timestamp) >= {since} \
-           AND toUnixTimestamp(timestamp) <= {until}"
+         WHERE toUnixTimestamp(timestamp) >= {since}"
     );
+
+    if let Some(until) = filter.until_unix {
+        sql.push_str(&format!(" AND toUnixTimestamp(timestamp) <= {until}"));
+    }
 
     if filter.grid_only.unwrap_or(false) {
         sql.push_str(" AND grid != ''");
@@ -383,13 +410,17 @@ pub async fn query_global_spots(
         " ORDER BY toUnixTimestamp(timestamp) DESC LIMIT {limit} OFFSET {offset}"
     ));
 
+    tracing::info!(table, since, limit, offset, sql, "global spots query");
+
     let rows: Vec<GlobalSpotRow> = client
         .query(&sql)
         .fetch_all()
         .await
         .context("global spots query")?;
 
-    Ok(rows.into_iter().map(GlobalSpot::from).collect())
+    let spots: Vec<GlobalSpot> = rows.into_iter().map(GlobalSpot::from).collect();
+    tracing::info!(count = spots.len(), "global spots returned");
+    Ok(spots)
 }
 
 /// Return up to 20 reporter callsigns that start with `prefix` (global only).
