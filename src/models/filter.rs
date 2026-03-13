@@ -56,7 +56,8 @@ pub struct SpotFilter {
     /// End of the time window as Unix epoch seconds.
     pub until_unix: Option<i64>,
 
-    /// Maximum rows to return (hard-capped at 5 000 in query layer).
+    /// Maximum rows to return.  `None` defers to the server-configured cap
+    /// (`WSPR_SPOT_LIMIT` for local, `WSPR_GLOBAL_SPOT_LIMIT` for global).
     pub limit: Option<u32>,
 
     /// Row offset for pagination.
@@ -67,9 +68,10 @@ pub struct SpotFilter {
 }
 
 impl Default for SpotFilter {
-    /// Sensible defaults: local source, no constraints, limit 500.
-    /// The time window defaults are applied by the query layer from server
-    /// config rather than being encoded here.
+    /// Sensible defaults: local source, no constraints.
+    /// `limit: None` defers to the server-configured cap so that
+    /// `WSPR_SPOT_LIMIT` / `WSPR_GLOBAL_SPOT_LIMIT` are the single source
+    /// of truth for the maximum row count.
     fn default() -> Self {
         Self {
             source: SpotSource::Local,
@@ -81,7 +83,7 @@ impl Default for SpotFilter {
             power_max: None,
             since_unix: None,
             until_unix: None,
-            limit: Some(500),
+            limit: None,
             offset: Some(0),
             grid_only: Some(false),
         }
