@@ -1,3 +1,4 @@
+#![recursion_limit = "512"]
 /// SSR entry point: Axum web server with Leptos SSR, server functions, and
 /// a live-stream SSE endpoint.
 ///
@@ -160,7 +161,8 @@ async fn spot_poll_task(
     loop {
         interval.tick().await;
 
-        match queries::query_new_spots(&db, &table, last_unix, &ignore_callsigns, spot_limit).await {
+        match queries::query_new_spots(&db, &table, last_unix, &ignore_callsigns, spot_limit).await
+        {
             Ok(spots) if !spots.is_empty() => {
                 last_unix = spots
                     .iter()

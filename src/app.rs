@@ -5,10 +5,12 @@ use leptos_router::{
     StaticSegment,
 };
 
-use crate::components::{FilterPanel, LiveBadge, SpotTable, StatsBar, WorldMap};
 use crate::components::live_badge::LiveState;
-use crate::models::SpotFilter;
-use crate::server_fns::{get_map_spots, get_public_config, get_spots, get_stats};
+use crate::components::{FilterPanel, LiveBadge, SpotTable, StatsBar, WorldMap};
+use crate::models::{AnySpot, SpotFilter, SpotSource};
+use crate::server_fns::{
+    get_global_map_spots, get_global_spots, get_map_spots, get_public_config, get_spots, get_stats,
+};
 
 // ---------------------------------------------------------------------------
 // HTML shell
@@ -81,8 +83,6 @@ fn HomePage() -> impl IntoView {
     // do not fire a ClickHouse query on every event.
     let debounced_filter = RwSignal::new(SpotFilter::default());
     // Grid + callsign selected by clicking a spot table row — drives map highlight.
-    // Stored as (grid, callsign) so the map can open the exact marker rather
-    // than any marker in the same grid square.
     let selected_grid: RwSignal<Option<(String, String)>> = RwSignal::new(None);
     // Live-stream badge state.
     let live_state = RwSignal::new(LiveState::Connecting);
@@ -100,11 +100,28 @@ fn HomePage() -> impl IntoView {
     // -----------------------------------------------------------------------
     let config_resource = LocalResource::new(get_public_config);
 
-    let map_spots_resource =
-        LocalResource::new(move || get_map_spots(debounced_filter.get()));
+    // Map spots: route to local or global query based on filter.source.
+    let map_spots_resource = LocalResource::new(move || async move {
+        let f = debounced_filter.get();
+        match f.source {
+            SpotSource::Local => get_map_spots(f).await,
+            SpotSource::Global => get_global_map_spots(f).await,
+        }
+    });
 
-    let spots_resource =
-        LocalResource::new(move || get_spots(debounced_filter.get()));
+    // Full spot list: route to local or global, wrapping results in AnySpot
+    // so the table component can render the correct columns for each source.
+    let spots_resource = LocalResource::new(move || async move {
+        let f = debounced_filter.get();
+        match f.source {
+            SpotSource::Local => get_spots(f)
+                .await
+                .map(|v| v.into_iter().map(AnySpot::Local).collect::<Vec<AnySpot>>()),
+            SpotSource::Global => get_global_spots(f)
+                .await
+                .map(|v| v.into_iter().map(AnySpot::Global).collect::<Vec<AnySpot>>()),
+        }
+    });
 
     let stats_resource = LocalResource::new(move || {
         let since = debounced_filter.with(|f| f.since_unix);
@@ -117,6 +134,41 @@ fn HomePage() -> impl IntoView {
     // Derived signals from resources
     // -----------------------------------------------------------------------
 
+    // Dynamic home-QTH override: when in global mode with a non-negated
+    // reporter filter active, derive the home coordinates from the reporter's
+    // grid square found in the returned map spots.  This re-centres the map
+    // and great-circle lines to the reporter's QTH without an extra server
+    // round-trip.
+    let reporter_home_override: Signal<Option<(f64, f64)>> = Signal::derive(move || {
+        #[cfg(feature = "hydrate")]
+        {
+            use crate::models::grid_to_latlon;
+
+            let f = filter.get();
+            if f.source != SpotSource::Global {
+                return None;
+            }
+            // Only override for a specific (non-negated) reporter filter.
+            let reporter_val = f.reporter?;
+            if reporter_val.is_empty() || reporter_val.starts_with('!') {
+                return None;
+            }
+            // Pull reporter_grid from the first resolved map spot that has one.
+            map_spots_resource
+                .get()
+                .and_then(|r| r.ok())
+                .and_then(|spots| {
+                    spots
+                        .iter()
+                        .find_map(|s| s.reporter_grid.as_deref())
+                        .and_then(grid_to_latlon)
+                        .map(|ll| (ll.lat, ll.lon))
+                })
+        }
+        #[cfg(not(feature = "hydrate"))]
+        None
+    });
+
     // JSON strings fed into the Leaflet JS bridge.
     // LocalResource::get() returns Option<Result<T, ServerFnError>>;
     // .and_then(|r| r.ok()) flattens to Option<T>.
@@ -128,17 +180,24 @@ fn HomePage() -> impl IntoView {
             .unwrap_or_default()
     });
 
+    // Config JSON, with optional reporter QTH override injected when a
+    // specific reporter filter is active in global mode.
     let config_json = Signal::derive(move || {
-        config_resource
-            .get()
-            .and_then(|r| r.ok())
-            .map(|c| serde_json::to_string(&c).unwrap_or_default())
-            .unwrap_or_default()
+        let mut cfg = match config_resource.get().and_then(|r| r.ok()) {
+            Some(c) => c,
+            None => return String::new(),
+        };
+        if let Some((lat, lon)) = reporter_home_override.get() {
+            cfg.my_lat = Some(lat);
+            cfg.my_lon = Some(lon);
+            // Clear the grid label so the home marker popup does not show
+            // the original receiver's grid when displaying a reporter's QTH.
+            cfg.my_grid = None;
+        }
+        serde_json::to_string(&cfg).unwrap_or_default()
     });
 
-    let stats_signal = Signal::derive(move || {
-        stats_resource.get().and_then(|r| r.ok())
-    });
+    let stats_signal = Signal::derive(move || stats_resource.get().and_then(|r| r.ok()));
 
     let bands_signal = Signal::derive(move || {
         config_resource
@@ -158,17 +217,26 @@ fn HomePage() -> impl IntoView {
             .map(|c| c.time_window_hours as i64 * 3600)
     });
 
-    // Spots list for the table (defaults to empty while loading).
+    // Spot list for the table (defaults to empty while loading).
     let table_spots = Signal::derive(move || {
-        spots_resource.get().and_then(|r| r.ok()).unwrap_or_default()
+        spots_resource
+            .get()
+            .and_then(|r| r.ok())
+            .unwrap_or_default()
     });
 
-    let selected_grid_signal =
-        Signal::derive(move || selected_grid.get());
+    // Whether the current source is global — passed to SpotTable to select
+    // the correct column set.
+    let is_global = Signal::derive(move || filter.read().source == SpotSource::Global);
+
+    let selected_grid_signal = Signal::derive(move || selected_grid.get());
 
     let live_signal = Signal::derive(move || live_state.get());
     let live_bool = Signal::derive(move || {
-        matches!(live_state.get(), LiveState::Connected | LiveState::Connecting)
+        matches!(
+            live_state.get(),
+            LiveState::Connected | LiveState::Connecting
+        )
     });
 
     // -----------------------------------------------------------------------
@@ -270,8 +338,8 @@ fn HomePage() -> impl IntoView {
                                     "Backend version {server_version} != client version \
                                      {CLIENT_VERSION}; reloading"
                                 );
-                                let window = web_sys::window()
-                                    .expect("should always have a Window in WASM");
+                                let window =
+                                    web_sys::window().expect("should always have a Window in WASM");
                                 let _ = window.location().reload();
                             }
                         },
@@ -304,10 +372,8 @@ fn HomePage() -> impl IntoView {
                             // We guard on the current state so that a pending timer is
                             // harmlessly discarded if the user switches live mode off.
                             let cb = wasm_bindgen::closure::Closure::once(move || {
-                                if matches!(
-                                    live_state.get_untracked(),
-                                    LiveState::Reconnecting(_)
-                                ) {
+                                if matches!(live_state.get_untracked(), LiveState::Reconnecting(_))
+                                {
                                     live_state.set(LiveState::Connecting);
                                 }
                             });
@@ -376,6 +442,7 @@ fn HomePage() -> impl IntoView {
 
                     <SpotTable
                         spots=table_spots
+                        is_global=is_global
                         on_row_select=Callback::new(move |g: Option<(String, String)>| {
                             selected_grid.set(g);
                         })

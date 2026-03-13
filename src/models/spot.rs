@@ -49,8 +49,62 @@ pub struct WsprSpot {
     pub distance_km: Option<f64>,
 }
 
+/// A single decoded spot from the global `global_spots` table.
+///
+/// Field names and units follow the global table's schema:
+/// - `frequency` is in MHz (not Hz as in `WsprSpot.freq_hz`)
+/// - `snr` / `power` use the global column names (no `_db` / `_dbm` suffix)
+/// - `distance_ch` is the reporter-to-transmitter distance pre-computed by
+///   the collection pipeline; `distance_km` is home-QTH distance added by the
+///   server function.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GlobalSpot {
+    /// Unique spot identifier from the global network.
+    pub spot_id: u64,
+    /// Unix epoch seconds of the spot timestamp.
+    pub timestamp_unix: i64,
+    /// Callsign of the reporting station.
+    pub reporter: String,
+    /// Maidenhead grid locator of the reporting station.
+    pub reporter_grid: String,
+    /// Signal-to-noise ratio in dB.
+    pub snr: i32,
+    /// Carrier frequency in MHz.
+    pub frequency: f64,
+    /// Callsign of the transmitting station.
+    pub callsign: String,
+    /// Maidenhead grid locator of the transmitting station.
+    pub grid: String,
+    /// Transmitted power in dBm.
+    pub power: i32,
+    /// Frequency drift in Hz/min.
+    pub drift: i32,
+    /// Reporter-to-transmitter great-circle distance in km, as provided by the
+    /// global collection pipeline.
+    pub distance_ch: i32,
+    /// Azimuth from the reporter to the transmitter in degrees.
+    pub azimuth: i32,
+    /// Band number (integer index matching wsprnet band enumeration).
+    pub band: i32,
+    /// WSPR software version string.
+    pub version: String,
+    /// Decode quality code.
+    pub code: i32,
+    /// Great-circle distance from the configured home QTH in kilometres.
+    /// `None` when no home QTH is configured or the spot has no grid.
+    pub distance_km: Option<f64>,
+    /// Human-readable band name, e.g. `"20m"`.
+    pub band_name: String,
+    /// CSS colour string for map markers, e.g. `"#2979FF"`.
+    pub band_color: String,
+}
+
 /// Lightweight map marker data: only the fields needed to render a spot on
 /// the world map, plus pre-computed lat/lon and band metadata.
+///
+/// Extended with optional `reporter` / `reporter_grid` fields so that global
+/// spots can carry reporter information for popup display and home-QTH
+/// override without changing the JavaScript interface.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MapSpot {
     /// Unix epoch seconds of the WSPR window start.
@@ -76,6 +130,23 @@ pub struct MapSpot {
     /// Great-circle distance from the configured home QTH in kilometres.
     /// `None` when no home QTH is configured.
     pub distance_km: Option<f64>,
+    /// Callsign of the reporting station (global mode only; `None` for local).
+    pub reporter: Option<String>,
+    /// Maidenhead grid locator of the reporter (global mode only; `None` for local).
+    pub reporter_grid: Option<String>,
+}
+
+/// Tagged union over local and global spot types, used as the single item type
+/// for the spot table when both modes share the same component.
+///
+/// All spots in a given resource fetch are the same variant — either all
+/// `Local` or all `Global` depending on `SpotFilter.source`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AnySpot {
+    /// A spot from the personal receiver (`wspr_spots` table).
+    Local(WsprSpot),
+    /// A spot from the global network (`global_spots` table).
+    Global(GlobalSpot),
 }
 
 /// Aggregate statistics over a set of spots.
@@ -148,7 +219,14 @@ impl PublicConfig {
             })
             .collect();
 
-        Self { my_grid, my_lat, my_lon, time_window_hours, bands, detail_zoom }
+        Self {
+            my_grid,
+            my_lat,
+            my_lon,
+            time_window_hours,
+            bands,
+            detail_zoom,
+        }
     }
 }
 
@@ -210,7 +288,8 @@ impl From<WsprSpotRow> for WsprSpot {
     }
 }
 
-/// Lightweight row used by the map query (fewer columns → less network traffic).
+/// Lightweight row used by the local map query (fewer columns → less network
+/// traffic from ClickHouse).
 #[cfg(feature = "ssr")]
 #[derive(Debug, clickhouse::Row, serde::Deserialize)]
 pub struct MapSpotRow {
@@ -245,6 +324,131 @@ impl From<MapSpotRow> for Option<MapSpot> {
             band_color,
             // Filled in by the server function after the query returns.
             distance_km: None,
+            // Local spots carry no reporter information.
+            reporter: None,
+            reporter_grid: None,
+        })
+    }
+}
+
+/// Raw deserialization target for a `global_spots` full row.
+///
+/// The `timestamp` DateTime column is projected as
+/// `toUnixTimestamp(timestamp) AS timestamp_unix` in the SELECT so the
+/// field name matches.  All other names are native column names.
+///
+/// # Type notes (ClickHouse → Rust)
+///
+/// - `frequency`: Float64 in MHz (wsprnet convention)
+/// - `snr`, `power`, `drift`, `distance`, `azimuth`, `band`, `code`: Int32
+/// - `spot_id`: UInt64
+///
+/// Adjust these types if your `global_spots` schema differs.
+#[cfg(feature = "ssr")]
+#[derive(Debug, clickhouse::Row, serde::Deserialize)]
+pub struct GlobalSpotRow {
+    pub spot_id: u64,
+    pub timestamp_unix: i64,
+    pub reporter: String,
+    pub reporter_grid: String,
+    pub snr: i32,
+    pub frequency: f64,
+    pub callsign: String,
+    pub grid: String,
+    pub power: i32,
+    pub drift: i32,
+    pub distance: i32,
+    pub azimuth: i32,
+    pub band: i32,
+    pub version: String,
+    pub code: i32,
+}
+
+#[cfg(feature = "ssr")]
+impl From<GlobalSpotRow> for GlobalSpot {
+    fn from(r: GlobalSpotRow) -> Self {
+        // frequency is in MHz; convert to Hz for band lookup.
+        let freq_hz = r.frequency * 1_000_000.0;
+        let (band_name, band_color) = band_info_for(freq_hz);
+        Self {
+            spot_id: r.spot_id,
+            timestamp_unix: r.timestamp_unix,
+            reporter: r.reporter,
+            reporter_grid: r.reporter_grid,
+            snr: r.snr,
+            frequency: r.frequency,
+            callsign: r.callsign,
+            grid: r.grid,
+            power: r.power,
+            drift: r.drift,
+            distance_ch: r.distance,
+            azimuth: r.azimuth,
+            band: r.band,
+            version: r.version,
+            code: r.code,
+            // Filled in by the server function using home QTH coordinates.
+            distance_km: None,
+            band_name,
+            band_color,
+        }
+    }
+}
+
+/// Lightweight row used by the global map query.
+///
+/// Uses the same field ordering and aliasing conventions as `GlobalSpotRow`
+/// but omits the heavy columns not needed for map rendering.
+#[cfg(feature = "ssr")]
+#[derive(Debug, clickhouse::Row, serde::Deserialize)]
+pub struct GlobalMapSpotRow {
+    pub timestamp_unix: i64,
+    pub callsign: String,
+    pub grid: String,
+    pub reporter: String,
+    pub reporter_grid: String,
+    /// Carrier frequency in MHz.
+    pub frequency: f64,
+    pub snr: i32,
+    pub power: i32,
+}
+
+#[cfg(feature = "ssr")]
+impl From<GlobalMapSpotRow> for Option<MapSpot> {
+    /// Returns `None` when the grid is empty or does not parse as a valid
+    /// Maidenhead locator.
+    fn from(r: GlobalMapSpotRow) -> Self {
+        if r.grid.is_empty() {
+            return None;
+        }
+        let ll = grid_to_latlon(&r.grid)?;
+        // frequency is stored in MHz; convert to Hz for band lookup and
+        // for the MapSpot.freq_hz field (which the JS popup formats as MHz).
+        let freq_hz = r.frequency * 1_000_000.0;
+        let (band_name, band_color) = band_info_for(freq_hz);
+        Some(MapSpot {
+            window_start_unix: r.timestamp_unix,
+            callsign: r.callsign,
+            grid: r.grid,
+            lat: ll.lat,
+            lon: ll.lon,
+            freq_hz,
+            snr_db: r.snr,
+            power_dbm: r.power,
+            band_name,
+            band_color,
+            // Filled in by the server function after the query returns.
+            distance_km: None,
+            // Populate reporter fields so the JS popup can show "Reported by:".
+            reporter: if r.reporter.is_empty() {
+                None
+            } else {
+                Some(r.reporter)
+            },
+            reporter_grid: if r.reporter_grid.is_empty() {
+                None
+            } else {
+                Some(r.reporter_grid)
+            },
         })
     }
 }
@@ -277,7 +481,7 @@ impl From<SpotStatsRow> for SpotStats {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-/// Return `(band_name, band_color)` for a given carrier frequency.
+/// Return `(band_name, band_color)` for a given carrier frequency **in Hz**.
 ///
 /// Falls back to `("unknown", "#808080")` when no standard band matches.
 pub fn band_info_for(freq_hz: f64) -> (String, String) {

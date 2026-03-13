@@ -493,6 +493,11 @@
 
   /**
    * Build the HTML popup for a single spot.
+   *
+   * When the spot carries `reporter` and `reporter_grid` fields (global mode),
+   * a "Reported by" row is appended so the viewer knows which station decoded
+   * the transmission.
+   *
    * @param {Object} spot
    * @returns {string}
    */
@@ -500,6 +505,12 @@
     const distRow = spot.distance_km != null
       ? '<div class="popup-row"><span>Dist</span><span>' +
         Math.round(spot.distance_km) + " km</span></div>"
+      : "";
+    const reporterLabel = spot.reporter
+      ? spot.reporter + (spot.reporter_grid ? " (" + spot.reporter_grid + ")" : "")
+      : null;
+    const reporterRow = reporterLabel
+      ? '<div class="popup-row"><span>Reporter</span><span>' + reporterLabel + "</span></div>"
       : "";
     return (
       '<div class="popup-callsign">' + spot.callsign + "</div>" +
@@ -509,7 +520,8 @@
       distRow +
       '<div class="popup-row"><span>SNR</span><span>' + spot.snr_db + " dB</span></div>" +
       '<div class="popup-row"><span>Pwr</span><span>' + spot.power_dbm + " dBm</span></div>" +
-      '<div class="popup-row"><span>Time</span><span>' + fmtTime(spot.window_start_unix) + "</span></div>"
+      '<div class="popup-row"><span>Time</span><span>' + fmtTime(spot.window_start_unix) + "</span></div>" +
+      reporterRow
     );
   }
 
@@ -710,9 +722,28 @@
         detailZoom = config.detail_zoom;
       }
 
-      if (config.my_lat != null && config.my_lon != null) {
-        homeLatLon = [config.my_lat, config.my_lon];
+      // Determine the new home location from the incoming config.  When
+      // my_lat/my_lon are absent (e.g. no QTH configured, or the reporter
+      // override was cleared), newHome is null and the home marker is removed.
+      const newHome = (config.my_lat != null && config.my_lon != null)
+        ? [config.my_lat, config.my_lon]
+        : null;
+
+      // Detect whether the home QTH has changed since the last init() call.
+      // A change means the reporter-filter override kicked in (or was cleared),
+      // so we need to remove the old marker and recreate it at the new position.
+      const homeChanged =
+        (newHome === null) !== (homeLatLon === null) ||
+        (newHome !== null && homeLatLon !== null &&
+          (newHome[0] !== homeLatLon[0] || newHome[1] !== homeLatLon[1]));
+
+      // Remove the stale home marker when the QTH changes (map must exist).
+      if (map && homeChanged && homeMarker) {
+        map.removeLayer(homeMarker);
+        homeMarker = null;
       }
+
+      homeLatLon = newHome;
 
       if (!map) {
         map = L.map("map", {
@@ -723,7 +754,7 @@
           attributionControl: true,
         });
 
-        const tileLayer = L.tileLayer(
+        L.tileLayer(
           "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
           {
             maxZoom: 18,
@@ -762,6 +793,8 @@
         map.on("zoomend moveend", onViewChange);
       }
 
+      // Create or recreate the home QTH marker whenever homeLatLon is set and
+      // no marker currently exists (handles both first init and post-change).
       if (homeLatLon && !homeMarker) {
         const grid = config.my_grid || "";
         homeMarker = L.circleMarker(homeLatLon, {

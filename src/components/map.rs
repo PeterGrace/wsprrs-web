@@ -93,9 +93,9 @@ fn js_wspr_map() -> Option<wasm_bindgen::JsValue> {
     let window = web_sys::window()?;
     let val = Reflect::get(&window, &JsValue::from_str("wsprMap")).ok()?;
     if val.is_undefined() || val.is_null() {
-        web_sys::console::error_1(
-            &JsValue::from_str("wsprMap: window.wsprMap is undefined — map.js may not have loaded"),
-        );
+        web_sys::console::error_1(&JsValue::from_str(
+            "wsprMap: window.wsprMap is undefined — map.js may not have loaded",
+        ));
         return None;
     }
     Some(val)
@@ -118,9 +118,9 @@ fn call_js_init_map(config_json: &str, spots_json: &str) {
     {
         Some(f) => f,
         None => {
-            web_sys::console::error_1(
-                &JsValue::from_str("wsprMap: window.wsprMap.init is not a function"),
-            );
+            web_sys::console::error_1(&JsValue::from_str(
+                "wsprMap: window.wsprMap.init is not a function",
+            ));
             return;
         }
     };
@@ -151,9 +151,9 @@ fn call_js_update_map(spots_json: &str) {
     {
         Some(f) => f,
         None => {
-            web_sys::console::error_1(
-                &JsValue::from_str("wsprMap: window.wsprMap.update is not a function"),
-            );
+            web_sys::console::error_1(&JsValue::from_str(
+                "wsprMap: window.wsprMap.update is not a function",
+            ));
             return;
         }
     };
@@ -184,9 +184,9 @@ fn call_js_set_grid_overlay(enabled: bool) {
     {
         Some(f) => f,
         None => {
-            web_sys::console::error_1(
-                &JsValue::from_str("wsprMap: window.wsprMap.setGridOverlay is not a function"),
-            );
+            web_sys::console::error_1(&JsValue::from_str(
+                "wsprMap: window.wsprMap.setGridOverlay is not a function",
+            ));
             return;
         }
     };
@@ -214,9 +214,9 @@ fn call_js_highlight_grid(grid: &str, callsign: &str) {
     {
         Some(f) => f,
         None => {
-            web_sys::console::error_1(
-                &JsValue::from_str("wsprMap: window.wsprMap.highlight is not a function"),
-            );
+            web_sys::console::error_1(&JsValue::from_str(
+                "wsprMap: window.wsprMap.highlight is not a function",
+            ));
             return;
         }
     };

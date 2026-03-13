@@ -7,7 +7,7 @@
 /// `leptos_routes_with_context`.
 use leptos::prelude::*;
 
-use crate::models::{MapSpot, PublicConfig, SpotFilter, SpotStats, WsprSpot};
+use crate::models::{GlobalSpot, MapSpot, PublicConfig, SpotFilter, SpotStats, WsprSpot};
 
 // ---------------------------------------------------------------------------
 // Server function: public configuration
@@ -44,16 +44,14 @@ pub async fn get_public_config() -> Result<PublicConfig, ServerFnError> {
 }
 
 // ---------------------------------------------------------------------------
-// Server function: map spots
+// Server function: local map spots
 // ---------------------------------------------------------------------------
 
-/// Fetch lightweight map-marker data for the given filter.
+/// Fetch lightweight map-marker data for the given filter (local receiver).
 ///
-/// Only spots that carry a valid Maidenhead grid are returned; type-2 messages
-/// (no grid) are excluded because they cannot be plotted.  Results are cached
-/// for 60 seconds, shared across all users, keyed on a timestamp-normalised
-/// copy of the filter so that the common "default view" is only queried once
-/// per minute regardless of how many browsers are open.
+/// Only spots that carry a valid Maidenhead grid are returned.  Results are
+/// cached for 60 seconds, shared across all users, keyed on a
+/// timestamp-normalised copy of the filter.
 #[server]
 pub async fn get_map_spots(filter: SpotFilter) -> Result<Vec<MapSpot>, ServerFnError> {
     use std::sync::Arc;
@@ -64,8 +62,7 @@ pub async fn get_map_spots(filter: SpotFilter) -> Result<Vec<MapSpot>, ServerFnE
     use crate::models::grid::{grid_to_latlon, haversine_km};
 
     let config = expect_context::<Arc<Config>>();
-    let default_since =
-        chrono::Utc::now().timestamp() - config.time_window_hours as i64 * 3600;
+    let default_since = chrono::Utc::now().timestamp() - config.time_window_hours as i64 * 3600;
 
     let cache = expect_context::<SharedQueryCache>();
     let cache_key = crate::cache::QueryCache::normalize_filter_key(&filter, default_since);
@@ -105,13 +102,13 @@ pub async fn get_map_spots(filter: SpotFilter) -> Result<Vec<MapSpot>, ServerFnE
 }
 
 // ---------------------------------------------------------------------------
-// Server function: spot list
+// Server function: local spot list
 // ---------------------------------------------------------------------------
 
-/// Fetch full spot records with all columns, paginated.
+/// Fetch full spot records from the local `wspr_spots` table, paginated.
 ///
 /// Results are cached for 60 seconds, shared across all users, keyed on a
-/// timestamp-normalised copy of the filter (same strategy as `get_map_spots`).
+/// timestamp-normalised copy of the filter.
 #[server]
 pub async fn get_spots(filter: SpotFilter) -> Result<Vec<WsprSpot>, ServerFnError> {
     use std::sync::Arc;
@@ -122,8 +119,7 @@ pub async fn get_spots(filter: SpotFilter) -> Result<Vec<WsprSpot>, ServerFnErro
     use crate::models::grid::{grid_to_latlon, haversine_km};
 
     let config = expect_context::<Arc<Config>>();
-    let default_since =
-        chrono::Utc::now().timestamp() - config.time_window_hours as i64 * 3600;
+    let default_since = chrono::Utc::now().timestamp() - config.time_window_hours as i64 * 3600;
 
     let cache = expect_context::<SharedQueryCache>();
     let cache_key = crate::cache::QueryCache::normalize_filter_key(&filter, default_since);
@@ -172,7 +168,7 @@ pub async fn get_spots(filter: SpotFilter) -> Result<Vec<WsprSpot>, ServerFnErro
 // ---------------------------------------------------------------------------
 
 /// Return aggregate statistics (total spots, unique callsigns, unique grids)
-/// for the given time range.  Results are cached for 30 seconds keyed on
+/// for the given time range.  Results are cached for 60 seconds keyed on
 /// timestamps rounded to the nearest minute.
 #[server]
 pub async fn get_stats(since_unix: i64, until_unix: i64) -> Result<SpotStats, ServerFnError> {
@@ -216,16 +212,12 @@ pub async fn get_stats(since_unix: i64, until_unix: i64) -> Result<SpotStats, Se
 }
 
 // ---------------------------------------------------------------------------
-// Server function: per-band counts
-// ---------------------------------------------------------------------------
 // Server function: callsign autocomplete
 // ---------------------------------------------------------------------------
 
-/// Return up to 20 callsigns that start with `prefix`.
+/// Return up to 20 callsigns that start with `prefix` (local table).
 #[server]
-pub async fn get_callsign_suggestions(
-    prefix: String,
-) -> Result<Vec<String>, ServerFnError> {
+pub async fn get_callsign_suggestions(prefix: String) -> Result<Vec<String>, ServerFnError> {
     use std::sync::Arc;
 
     use crate::config::Config;
@@ -234,10 +226,163 @@ pub async fn get_callsign_suggestions(
     let config = expect_context::<Arc<Config>>();
     let client = expect_context::<clickhouse::Client>();
 
-    queries::query_callsign_suggestions(&client, &config.clickhouse_table, &prefix, &config.ignore_callsigns)
+    queries::query_callsign_suggestions(
+        &client,
+        &config.clickhouse_table,
+        &prefix,
+        &config.ignore_callsigns,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("get_callsign_suggestions query failed: {e:#}");
+        ServerFnError::ServerError(e.to_string())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Server function: global map spots
+// ---------------------------------------------------------------------------
+
+/// Fetch lightweight map-marker data from the global `global_spots` table.
+///
+/// Behaves like `get_map_spots` but queries the global table and supports
+/// the `filter.reporter` constraint.  Reporter information is included in the
+/// returned `MapSpot` records so the JS layer can display it in popups and so
+/// the caller can derive a dynamic home-QTH from the reporter's grid.
+#[server]
+pub async fn get_global_map_spots(filter: SpotFilter) -> Result<Vec<MapSpot>, ServerFnError> {
+    use std::sync::Arc;
+
+    use crate::cache::SharedQueryCache;
+    use crate::config::Config;
+    use crate::db::queries;
+    use crate::models::grid::{grid_to_latlon, haversine_km};
+
+    let config = expect_context::<Arc<Config>>();
+    let default_since = chrono::Utc::now().timestamp() - config.time_window_hours as i64 * 3600;
+
+    let cache = expect_context::<SharedQueryCache>();
+    let cache_key = crate::cache::QueryCache::normalize_filter_key(&filter, default_since);
+
+    if let Some(cached) = cache.global_map_spots.get(&cache_key).await {
+        return Ok(cached);
+    }
+
+    let client = expect_context::<clickhouse::Client>();
+    let home = config.my_grid.as_deref().and_then(grid_to_latlon);
+
+    let mut spots: Vec<MapSpot> = match queries::query_global_map_spots(
+        &client,
+        &filter,
+        &config.global_table,
+        default_since,
+        &config.ignore_callsigns,
+        config.spot_limit,
+    )
+    .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("get_global_map_spots query failed: {e:#}");
+            return Err(ServerFnError::ServerError(e.to_string()));
+        }
+    };
+
+    if let Some(home) = home {
+        for spot in &mut spots {
+            spot.distance_km = Some(haversine_km(home.lat, home.lon, spot.lat, spot.lon));
+        }
+    }
+
+    cache.global_map_spots.set(cache_key, spots.clone()).await;
+    Ok(spots)
+}
+
+// ---------------------------------------------------------------------------
+// Server function: global spot list
+// ---------------------------------------------------------------------------
+
+/// Fetch full spot records from the global `global_spots` table, paginated.
+///
+/// Results are cached for 60 seconds.  Home-QTH distance is computed from the
+/// server-configured `WSPR_MY_GRID` (or the reporter's grid if the caller
+/// overrides it client-side after receiving the data).
+#[server]
+pub async fn get_global_spots(filter: SpotFilter) -> Result<Vec<GlobalSpot>, ServerFnError> {
+    use std::sync::Arc;
+
+    use crate::cache::SharedQueryCache;
+    use crate::config::Config;
+    use crate::db::queries;
+    use crate::models::grid::{grid_to_latlon, haversine_km};
+
+    let config = expect_context::<Arc<Config>>();
+    let default_since = chrono::Utc::now().timestamp() - config.time_window_hours as i64 * 3600;
+
+    let cache = expect_context::<SharedQueryCache>();
+    let cache_key = crate::cache::QueryCache::normalize_filter_key(&filter, default_since);
+
+    if let Some(cached) = cache.global_spots.get(&cache_key).await {
+        return Ok(cached);
+    }
+
+    let client = expect_context::<clickhouse::Client>();
+    let home = config.my_grid.as_deref().and_then(grid_to_latlon);
+
+    let mut spots: Vec<GlobalSpot> = match queries::query_global_spots(
+        &client,
+        &filter,
+        &config.global_table,
+        default_since,
+        &config.ignore_callsigns,
+        config.spot_limit,
+    )
+    .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("get_global_spots query failed: {e:#}");
+            return Err(ServerFnError::ServerError(e.to_string()));
+        }
+    };
+
+    if let Some(home) = home {
+        for spot in &mut spots {
+            if spot.grid.is_empty() {
+                continue;
+            }
+            if let Some(ll) = grid_to_latlon(&spot.grid) {
+                spot.distance_km = Some(haversine_km(home.lat, home.lon, ll.lat, ll.lon));
+            }
+        }
+    }
+
+    cache.global_spots.set(cache_key, spots.clone()).await;
+    Ok(spots)
+}
+
+// ---------------------------------------------------------------------------
+// Server function: reporter autocomplete
+// ---------------------------------------------------------------------------
+
+/// Return up to 20 reporter callsigns that start with `prefix` (global table).
+///
+/// Not cached; intended for interactive autocomplete where freshness matters
+/// more than deduplication.
+#[server]
+pub async fn get_reporter_suggestions(prefix: String) -> Result<Vec<String>, ServerFnError> {
+    use std::sync::Arc;
+
+    use crate::config::Config;
+    use crate::db::queries;
+
+    let config = expect_context::<Arc<Config>>();
+    let client = expect_context::<clickhouse::Client>();
+
+    queries::query_reporter_suggestions(&client, &config.global_table, &prefix)
         .await
         .map_err(|e| {
-            tracing::error!("get_callsign_suggestions query failed: {e:#}");
+            tracing::error!("get_reporter_suggestions query failed: {e:#}");
             ServerFnError::ServerError(e.to_string())
         })
 }

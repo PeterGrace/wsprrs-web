@@ -26,22 +26,22 @@ pub struct BandDef {
 /// regardless of how many bands are defined.
 const BAND_RAW: &[(&str, u64)] = &[
     ("2200m", 136_000),
-    ("630m",  474_200),
-    ("160m",  1_836_600),
-    ("80m",   3_592_600),
-    ("60m",   5_287_200),
-    ("40m",   7_038_600),
-    ("30m",   10_138_700),
-    ("20m",   14_095_600),
-    ("17m",   18_104_600),
-    ("15m",   21_094_600),
-    ("12m",   24_924_600),
-    ("10m",   28_124_600),
-    ("6m",    50_293_000),
-    ("4m",    70_091_000),
-    ("2m",    144_489_000),
-    ("70cm",  432_300_000),
-    ("23cm",  1_296_500_000),
+    ("630m", 474_200),
+    ("160m", 1_836_600),
+    ("80m", 3_592_600),
+    ("60m", 5_287_200),
+    ("40m", 7_038_600),
+    ("30m", 10_138_700),
+    ("20m", 14_095_600),
+    ("17m", 18_104_600),
+    ("15m", 21_094_600),
+    ("12m", 24_924_600),
+    ("10m", 28_124_600),
+    ("6m", 50_293_000),
+    ("4m", 70_091_000),
+    ("2m", 144_489_000),
+    ("70cm", 432_300_000),
+    ("23cm", 1_296_500_000),
 ];
 
 /// Golden angle in degrees: 360° × (1 − 1/φ), where φ is the golden ratio.
@@ -77,7 +77,11 @@ pub fn wspr_bands() -> &'static [BandDef] {
             .enumerate()
             .map(|(i, &(name, dial_hz))| {
                 let hue = (i as f64 * GOLDEN_ANGLE_DEG + HUE_OFFSET_DEG) % 360.0;
-                BandDef { name, dial_hz, color: hsl_to_hex(hue, 1.0, 0.55) }
+                BandDef {
+                    name,
+                    dial_hz,
+                    color: hsl_to_hex(hue, 1.0, 0.55),
+                }
             })
             .collect()
     })
@@ -139,8 +143,7 @@ pub fn haversine_km(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let dlon = (lon2 - lon1).to_radians();
     let lat1 = lat1.to_radians();
     let lat2 = lat2.to_radians();
-    let a = (dlat / 2.0).sin().powi(2)
-        + lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powi(2);
+    let a = (dlat / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powi(2);
     R * 2.0 * a.sqrt().asin()
 }
 

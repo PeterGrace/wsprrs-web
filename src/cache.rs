@@ -4,21 +4,24 @@
 /// lock.  Entries expire after a configurable [`Duration`]; stale entries are
 /// evicted lazily on the next read rather than by a background sweeper.
 ///
-/// [`QueryCache`] composes five `TtlCache` instances, all shared across every
+/// [`QueryCache`] composes six `TtlCache` instances, all shared across every
 /// concurrent user so that an identical query from userA and userB hits
 /// ClickHouse only once per TTL window:
 ///
-/// | Query              | Cache key                      | TTL       |
-/// |--------------------|--------------------------------|-----------|
-/// | `get_public_config`| `()`                           | 5 minutes |
-/// | `get_stats`        | `(since_rounded, until_rounded)`| 60 seconds |
-/// | `get_map_spots`    | `SpotFilter` (normalised)      | 60 seconds |
-/// | `get_spots`        | `SpotFilter` (normalised)      | 60 seconds |
+/// | Query                   | Cache key                       | TTL       |
+/// |-------------------------|---------------------------------|-----------|
+/// | `get_public_config`     | `()`                            | 5 minutes |
+/// | `get_stats`             | `(since_rounded, until_rounded)`| 60 seconds |
+/// | `get_map_spots`         | `SpotFilter` (normalised)       | 60 seconds |
+/// | `get_spots`             | `SpotFilter` (normalised)       | 60 seconds |
+/// | `get_global_map_spots`  | `SpotFilter` (normalised)       | 60 seconds |
+/// | `get_global_spots`      | `SpotFilter` (normalised)       | 60 seconds |
 ///
 /// Timestamp fields inside a [`SpotFilter`] key are rounded to the nearest
 /// 60 seconds before lookup (via [`QueryCache::normalize_filter_key`]) so that
 /// requests whose `since_unix` differs by only a few seconds still share the
-/// same entry.
+/// same entry.  The `source` and `reporter` fields are preserved verbatim so
+/// that local and global queries never share cache entries.
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -26,7 +29,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::RwLock;
 
-use crate::models::{MapSpot, PublicConfig, SpotFilter, SpotStats, WsprSpot};
+use crate::models::{GlobalSpot, MapSpot, PublicConfig, SpotFilter, SpotStats, WsprSpot};
 
 // ---------------------------------------------------------------------------
 // Generic TTL cache
@@ -95,6 +98,12 @@ pub struct QueryCache {
     /// Cache for `get_spots(filter)`.  Key is a timestamp-normalised clone of
     /// the `SpotFilter`.  TTL: 60 seconds.
     pub spots: TtlCache<SpotFilter, Vec<WsprSpot>>,
+    /// Cache for `get_global_map_spots(filter)`.  Key is a timestamp-normalised
+    /// clone of the `SpotFilter`.  TTL: 60 seconds.
+    pub global_map_spots: TtlCache<SpotFilter, Vec<MapSpot>>,
+    /// Cache for `get_global_spots(filter)`.  Key is a timestamp-normalised
+    /// clone of the `SpotFilter`.  TTL: 60 seconds.
+    pub global_spots: TtlCache<SpotFilter, Vec<GlobalSpot>>,
 }
 
 impl QueryCache {
@@ -105,6 +114,8 @@ impl QueryCache {
             stats: TtlCache::new(Duration::from_secs(60)),
             map_spots: TtlCache::new(Duration::from_secs(60)),
             spots: TtlCache::new(Duration::from_secs(60)),
+            global_map_spots: TtlCache::new(Duration::from_secs(60)),
+            global_spots: TtlCache::new(Duration::from_secs(60)),
         }
     }
 
@@ -124,16 +135,18 @@ impl QueryCache {
     ///   same key regardless of the exact wall-clock second at request time.
     /// * Both `since_unix` and `until_unix` are rounded to the nearest 60-second
     ///   boundary so requests within the same minute share an entry.
+    /// * `source` and `reporter` are preserved verbatim: local/global queries
+    ///   and reporter-filtered queries must never share a cache entry.
     pub fn normalize_filter_key(filter: &SpotFilter, default_since: i64) -> SpotFilter {
         SpotFilter {
+            source: filter.source.clone(),
             callsign: filter.callsign.clone(),
+            reporter: filter.reporter.clone(),
             grid: filter.grid.clone(),
             band_hz: filter.band_hz,
             snr_min: filter.snr_min,
             power_max: filter.power_max,
-            since_unix: Some(Self::round_ts(
-                filter.since_unix.unwrap_or(default_since),
-            )),
+            since_unix: Some(Self::round_ts(filter.since_unix.unwrap_or(default_since))),
             until_unix: filter.until_unix.map(Self::round_ts),
             limit: filter.limit,
             offset: filter.offset,

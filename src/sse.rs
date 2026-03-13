@@ -23,8 +23,8 @@ impl SseHandle {
 /// * `url`        — SSE endpoint, e.g. `"/api/stream"`
 /// * `on_open`    — called once when the connection is successfully established
 /// * `on_version` — called with the version string from each `event: version` message;
-///                  the caller is responsible for comparing it to the client build and
-///                  triggering a reload if they differ
+///   the caller is responsible for comparing it to the client build and
+///   triggering a reload if they differ
 /// * `on_spots`   — called with the raw JSON string for each `event: spots` message
 /// * `on_error`   — called when the browser reports a connection failure
 ///
@@ -42,8 +42,7 @@ pub fn start_sse(
     use wasm_bindgen::prelude::Closure;
     use wasm_bindgen::JsCast;
 
-    let source =
-        web_sys::EventSource::new(url).expect("EventSource construction should not fail");
+    let source = web_sys::EventSource::new(url).expect("EventSource construction should not fail");
 
     // `open` fires once the HTTP connection is established and the server has
     // sent the initial response headers.  This is the right moment to flip the
@@ -58,26 +57,24 @@ pub fn start_sse(
 
     // `event: version` is emitted once by the server immediately on connect.
     // The data is a `"{pkg_version}+{git_sha}"` string.
-    let version_cb = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(
-        move |ev: web_sys::MessageEvent| {
+    let version_cb =
+        Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |ev: web_sys::MessageEvent| {
             if let Some(data) = ev.data().as_string() {
                 on_version(data);
             }
-        },
-    );
+        });
     source
         .add_event_listener_with_callback("version", version_cb.as_ref().unchecked_ref())
         .expect("add_event_listener (version) should not fail");
     version_cb.forget();
 
     // Named `event: spots` messages carry a JSON array of MapSpot objects.
-    let spots_cb = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(
-        move |ev: web_sys::MessageEvent| {
+    let spots_cb =
+        Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |ev: web_sys::MessageEvent| {
             if let Some(data) = ev.data().as_string() {
                 on_spots(data);
             }
-        },
-    );
+        });
     source
         .add_event_listener_with_callback("spots", spots_cb.as_ref().unchecked_ref())
         .expect("add_event_listener (spots) should not fail");

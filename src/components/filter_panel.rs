@@ -1,12 +1,14 @@
-/// Filter panel component: callsign search, grid search, band selector,
-/// SNR slider, relative time-window selector, and a live-mode toggle.
+/// Filter panel component: source toggle, callsign search, reporter search,
+/// grid search, band selector, SNR slider, relative time-window selector,
+/// and a live-mode toggle.
 ///
 /// All controls write into a shared `RwSignal<SpotFilter>`.  Components that
 /// display data (`WorldMap`, `SpotTable`, `StatsBar`) read the same signal so
 /// they update automatically whenever the filter changes.
 use leptos::prelude::*;
 
-use crate::models::{BandInfo, SpotFilter};
+use crate::models::{BandInfo, SpotFilter, SpotSource};
+use crate::server_fns::get_reporter_suggestions;
 
 // Used as the fallback before the server config resolves.
 const DEFAULT_WINDOW_SECS_FALLBACK: i64 = 3_600;
@@ -15,14 +17,14 @@ const DEFAULT_WINDOW_SECS_FALLBACK: i64 = 3_600;
 ///
 /// Each tuple is `(label, seconds_back)`.
 const TIME_WINDOWS: &[(&str, i64)] = &[
-    ("1 hour",   3_600),
-    ("2 hours",  7_200),
-    ("4 hours",  14_400),
-    ("8 hours",  28_800),
+    ("1 hour", 3_600),
+    ("2 hours", 7_200),
+    ("4 hours", 14_400),
+    ("8 hours", 28_800),
     ("12 hours", 43_200),
     ("24 hours", 86_400),
     ("48 hours", 172_800),
-    ("7 days",   604_800),
+    ("7 days", 604_800),
 ];
 
 #[component]
@@ -55,6 +57,11 @@ pub fn FilterPanel(
     // Guard so we only apply the server default once (on first resolution).
     let config_applied = RwSignal::new(false);
 
+    // Separate signal for the reporter input's current text, used to drive
+    // the autocomplete datalist without coupling to filter.reporter directly.
+    // (filter.reporter may carry a leading "!" which we strip for suggestions.)
+    let reporter_prefix: RwSignal<String> = RwSignal::new(String::new());
+
     // When the server config resolves for the first time, snap the dropdown
     // and the filter's `since_unix` to the server-configured window.
     Effect::new(move |_| {
@@ -75,10 +82,39 @@ pub fn FilterPanel(
     // Derived readable signals for individual filter fields
     // -----------------------------------------------------------------------
 
+    let source_is_global = move || filter.read().source == SpotSource::Global;
     let callsign = move || filter.read().callsign.clone().unwrap_or_default();
+    let reporter_val = move || filter.read().reporter.clone().unwrap_or_default();
     let grid_val = move || filter.read().grid.clone().unwrap_or_default();
     let snr_min = move || filter.read().snr_min.unwrap_or(-30);
     let grid_only = move || filter.read().grid_only.unwrap_or(false);
+
+    // -----------------------------------------------------------------------
+    // Reporter autocomplete resource
+    //
+    // Fetches suggestions on every keystroke (debouncing handled by the
+    // browser's datalist rendering rather than an explicit timer).  Returns
+    // an empty list when the prefix is empty or contains only a "!" prefix.
+    // -----------------------------------------------------------------------
+    let reporter_suggestions_resource = LocalResource::new(move || {
+        let prefix = reporter_prefix.get();
+        async move {
+            // Strip leading "!" before querying so negation prefixes don't
+            // prevent suggestions from appearing.
+            let clean = prefix.strip_prefix('!').unwrap_or(&prefix).to_string();
+            if clean.is_empty() {
+                return Ok::<Vec<String>, leptos::server_fn::error::ServerFnError>(vec![]);
+            }
+            get_reporter_suggestions(clean).await
+        }
+    });
+
+    let reporter_suggestions = Signal::derive(move || {
+        reporter_suggestions_resource
+            .get()
+            .and_then(|r| r.ok())
+            .unwrap_or_default()
+    });
 
     // -----------------------------------------------------------------------
     // View
@@ -86,6 +122,42 @@ pub fn FilterPanel(
     view! {
         <aside id="filter-panel">
             <h2 class="panel-title">"Filters"</h2>
+
+            // --- Source toggle ---
+            <div class="filter-group filter-group--source">
+                <label>"Source"</label>
+                <div class="source-toggle">
+                    <button
+                        class=move || {
+                            if !source_is_global() { "btn btn--source btn--source-active" }
+                            else { "btn btn--source" }
+                        }
+                        on:click=move |_| {
+                            filter.update(|f| {
+                                f.source = SpotSource::Local;
+                                // Clear reporter when switching away from global mode.
+                                f.reporter = None;
+                            });
+                            reporter_prefix.set(String::new());
+                        }
+                    >
+                        "Local Receive"
+                    </button>
+                    <button
+                        class=move || {
+                            if source_is_global() { "btn btn--source btn--source-active" }
+                            else { "btn btn--source" }
+                        }
+                        on:click=move |_| {
+                            filter.update(|f| {
+                                f.source = SpotSource::Global;
+                            });
+                        }
+                    >
+                        "Global"
+                    </button>
+                </div>
+            </div>
 
             // --- Callsign ---
             <div class="filter-group">
@@ -104,6 +176,41 @@ pub fn FilterPanel(
                     }
                 />
             </div>
+
+            // --- Reporter (global mode only) ---
+            <Show when=source_is_global>
+                <div class="filter-group">
+                    <label for="filter-reporter">"Reporter"</label>
+                    <datalist id="reporter-suggestions">
+                        <For
+                            each=move || reporter_suggestions.get()
+                            key=|s| s.clone()
+                            children=move |s| view! { <option value=s /> }
+                        />
+                    </datalist>
+                    <input
+                        id="filter-reporter"
+                        type="text"
+                        list="reporter-suggestions"
+                        placeholder="e.g. W3POG or !W3POG"
+                        maxlength="21"
+                        value=reporter_val
+                        on:input=move |ev| {
+                            let val = event_target_value(&ev);
+                            // Strip "!" for suggestion prefix but keep the full
+                            // value in the filter so negation works.
+                            let prefix = val
+                                .strip_prefix('!')
+                                .unwrap_or(&val)
+                                .to_string();
+                            reporter_prefix.set(prefix);
+                            filter.update(|f| {
+                                f.reporter = if val.is_empty() { None } else { Some(val) };
+                            });
+                        }
+                    />
+                </div>
+            </Show>
 
             // --- Grid ---
             <div class="filter-group">
@@ -273,9 +380,11 @@ pub fn FilterPanel(
                             .unwrap_or(DEFAULT_WINDOW_SECS_FALLBACK);
                         window_secs.set(secs);
                         let now = chrono::Utc::now().timestamp();
-                        let mut f = SpotFilter::default();
-                        f.since_unix = Some(now - secs);
-                        filter.set(f);
+                        reporter_prefix.set(String::new());
+                        filter.set(SpotFilter {
+                            since_unix: Some(now - secs),
+                            ..SpotFilter::default()
+                        });
                     }
                 >
                     "Reset"

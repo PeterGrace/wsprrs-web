@@ -1,5 +1,18 @@
 use serde::{Deserialize, Serialize};
 
+/// Whether to query personal receive data or the global WSPR spot network.
+///
+/// The `Default` variant is `Local` so that existing callers (and the UI
+/// on first render) see personal data without any extra configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum SpotSource {
+    /// Personal receiver data from the `wspr_spots` table.
+    #[default]
+    Local,
+    /// Worldwide spot data from the `global_spots` table.
+    Global,
+}
+
 /// Query filter passed to all spot-fetching server functions.
 ///
 /// All fields are optional; missing values mean "no constraint".  The struct
@@ -7,14 +20,23 @@ use serde::{Deserialize, Serialize};
 /// round-trip, so all types must implement `Serialize + Deserialize`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SpotFilter {
+    /// Data source: personal receive data (`Local`) or global network (`Global`).
+    pub source: SpotSource,
+
     /// Filter by callsign prefix (case-insensitive, trailing wildcard applied).
+    /// A leading `!` negates the match (e.g. `"!K1ABC"` → exclude K1ABC%).
     pub callsign: Option<String>,
+
+    /// Filter by reporter callsign (global mode only).
+    /// A leading `!` negates the match (e.g. `"!W3POG"` → exclude W3POG%).
+    pub reporter: Option<String>,
 
     /// Filter by grid prefix, e.g. `"FN20"` matches `"FN20"` and `"FN20eg"`.
     pub grid: Option<String>,
 
     /// Nominal WSPR dial frequency in Hz that identifies the desired band.
-    /// When set, only spots within ±10 kHz of this value are returned.
+    /// When set, only spots within ±10 kHz of this value are returned (local),
+    /// or the matching `band` integer column is used (global).
     pub band_hz: Option<u64>,
 
     /// Minimum SNR in dB (inclusive).
@@ -40,11 +62,14 @@ pub struct SpotFilter {
 }
 
 impl Default for SpotFilter {
-    /// Sensible defaults: no constraints, limit 500, last-hour window is set
-    /// by the query layer based on server config rather than in the filter.
+    /// Sensible defaults: local source, no constraints, limit 500.
+    /// The time window defaults are applied by the query layer from server
+    /// config rather than being encoded here.
     fn default() -> Self {
         Self {
+            source: SpotSource::Local,
             callsign: None,
+            reporter: None,
             grid: None,
             band_hz: None,
             snr_min: None,

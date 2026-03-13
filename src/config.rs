@@ -11,8 +11,13 @@ pub struct Config {
     /// ClickHouse database name.
     pub clickhouse_db: String,
 
-    /// ClickHouse table name for WSPR spots.
+    /// ClickHouse table name for personal WSPR spots.
     pub clickhouse_table: String,
+
+    /// ClickHouse table name for global WSPR spots.
+    ///
+    /// Populated from `WSPR_GLOBAL_TABLE` (default: `"global_spots"`).
+    pub global_table: String,
 
     /// Optional ClickHouse username.
     pub clickhouse_user: Option<String>,
@@ -68,6 +73,8 @@ impl Config {
                 .unwrap_or_else(|_| "wsprrs".to_string()),
             clickhouse_table: std::env::var("WSPR_CLICKHOUSE_TABLE")
                 .unwrap_or_else(|_| "wspr_spots".to_string()),
+            global_table: std::env::var("WSPR_GLOBAL_TABLE")
+                .unwrap_or_else(|_| "global_spots".to_string()),
             clickhouse_user: std::env::var("WSPR_CLICKHOUSE_USER").ok(),
             clickhouse_password: std::env::var("WSPR_CLICKHOUSE_PASSWORD").ok(),
             my_grid: std::env::var("WSPR_MY_GRID").ok(),

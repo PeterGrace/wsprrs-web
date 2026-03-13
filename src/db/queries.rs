@@ -9,17 +9,21 @@
 /// formatted directly into the SQL string — they are typed and cannot carry
 /// SQL injection payloads.
 ///
-/// String values (callsign, grid) are sanitised by
+/// String values (callsign, grid, reporter) are sanitised by
 /// [`sanitise_locator`] / [`sanitise_callsign`] before being embedded, keeping
 /// only characters that are valid in those fields.
 use anyhow::Context;
 
 use crate::models::{
     filter::SpotFilter,
-    spot::{MapSpot, MapSpotRow, SpotStats, SpotStatsRow, WsprSpot, WsprSpotRow},
+    grid::wspr_bands,
+    spot::{
+        GlobalMapSpotRow, GlobalSpot, GlobalSpotRow, MapSpot, MapSpotRow, SpotStats, SpotStatsRow,
+        WsprSpot, WsprSpotRow,
+    },
 };
 
-/// Single-column row used for the callsign autocomplete query.
+/// Single-column row used for callsign / reporter autocomplete queries.
 #[derive(Debug, clickhouse::Row, serde::Deserialize)]
 struct CallsignRow {
     callsign: String,
@@ -52,7 +56,7 @@ fn sanitise_locator(s: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Core queries
+// Core queries — local (wspr_spots)
 // ---------------------------------------------------------------------------
 
 /// Fetch lightweight map-marker data for all spots in the given filter window.
@@ -99,7 +103,10 @@ pub async fn query_map_spots(
         .await
         .context("map spots query")?;
 
-    Ok(rows.into_iter().filter_map(Option::<MapSpot>::from).collect())
+    Ok(rows
+        .into_iter()
+        .filter_map(Option::<MapSpot>::from)
+        .collect())
 }
 
 /// Fetch full spot records with all ClickHouse columns.
@@ -236,12 +243,12 @@ pub async fn query_callsign_suggestions(
 
 /// Fetch spots newer than `after_unix` for the SSE live stream.
 ///
-/// Returns at most 500 spots to keep individual events small.
+/// Returns at most `spot_limit` spots to keep individual events small.
 ///
 /// # Arguments
 ///
 /// * `ignore_callsigns` — server-configured callsigns to exclude from results
-/// * `spot_limit`       — maximum number of spots to return per poll (`WSPR_SPOT_LIMIT`)
+/// * `spot_limit`       — maximum number of spots to return per poll
 pub async fn query_new_spots(
     client: &clickhouse::Client,
     table: &str,
@@ -256,7 +263,9 @@ pub async fn query_new_spots(
            AND window_start_unix > {after_unix}"
     );
     append_ignore_callsigns(&mut sql, ignore_callsigns);
-    sql.push_str(&format!(" ORDER BY window_start_unix DESC LIMIT {spot_limit}"));
+    sql.push_str(&format!(
+        " ORDER BY window_start_unix DESC LIMIT {spot_limit}"
+    ));
 
     let rows: Vec<MapSpotRow> = client
         .query(&sql)
@@ -264,7 +273,160 @@ pub async fn query_new_spots(
         .await
         .context("new spots query")?;
 
-    Ok(rows.into_iter().filter_map(Option::<MapSpot>::from).collect())
+    Ok(rows
+        .into_iter()
+        .filter_map(Option::<MapSpot>::from)
+        .collect())
+}
+
+// ---------------------------------------------------------------------------
+// Core queries — global (global_spots)
+// ---------------------------------------------------------------------------
+
+/// Fetch lightweight map-marker data from the global spot table.
+///
+/// The `timestamp` DateTime column is converted to Unix seconds via
+/// `toUnixTimestamp()`.  Reporter information is included so that the
+/// home-QTH override can derive the reporter's grid from the result set.
+///
+/// # Arguments
+///
+/// * `client`           — ClickHouse HTTP client
+/// * `filter`           — query constraints; `filter.reporter` is applied here
+/// * `table`            — global spots table name, e.g. `"global_spots"`
+/// * `default_since`    — fallback `since_unix` when `filter.since_unix` is `None`
+/// * `ignore_callsigns` — transmitter callsigns to exclude
+/// * `spot_limit`       — maximum row count
+pub async fn query_global_map_spots(
+    client: &clickhouse::Client,
+    filter: &SpotFilter,
+    table: &str,
+    default_since: i64,
+    ignore_callsigns: &[String],
+    spot_limit: u32,
+) -> anyhow::Result<Vec<MapSpot>> {
+    let since = filter.since_unix.unwrap_or(default_since);
+    let until = filter.until_unix.unwrap_or(i64::MAX);
+    let limit = filter.limit.unwrap_or(spot_limit).min(spot_limit);
+
+    let mut sql = format!(
+        "SELECT \
+          toUnixTimestamp(timestamp) AS timestamp_unix, \
+          callsign, grid, reporter, reporter_grid, \
+          frequency, snr, power \
+         FROM {table} \
+         WHERE grid != '' \
+           AND toUnixTimestamp(timestamp) >= {since} \
+           AND toUnixTimestamp(timestamp) <= {until}"
+    );
+
+    append_ignore_callsigns(&mut sql, ignore_callsigns);
+    append_reporter_filter(&mut sql, filter);
+    append_global_shared_filters(&mut sql, filter);
+
+    sql.push_str(&format!(
+        " ORDER BY toUnixTimestamp(timestamp) DESC LIMIT {limit}"
+    ));
+
+    let rows: Vec<GlobalMapSpotRow> = client
+        .query(&sql)
+        .fetch_all()
+        .await
+        .context("global map spots query")?;
+
+    Ok(rows
+        .into_iter()
+        .filter_map(Option::<MapSpot>::from)
+        .collect())
+}
+
+/// Fetch full spot records from the global spot table.
+///
+/// # Arguments
+///
+/// * `ignore_callsigns` — transmitter callsigns to exclude
+/// * `spot_limit`       — default and maximum row count
+pub async fn query_global_spots(
+    client: &clickhouse::Client,
+    filter: &SpotFilter,
+    table: &str,
+    default_since: i64,
+    ignore_callsigns: &[String],
+    spot_limit: u32,
+) -> anyhow::Result<Vec<GlobalSpot>> {
+    let since = filter.since_unix.unwrap_or(default_since);
+    let until = filter.until_unix.unwrap_or(i64::MAX);
+    let limit = filter.limit.unwrap_or(spot_limit).min(spot_limit);
+    let offset = filter.offset.unwrap_or(0);
+
+    let mut sql = format!(
+        "SELECT \
+          spot_id, \
+          toUnixTimestamp(timestamp) AS timestamp_unix, \
+          reporter, reporter_grid, snr, frequency, \
+          callsign, grid, power, drift, distance, azimuth, \
+          band, version, code \
+         FROM {table} \
+         WHERE toUnixTimestamp(timestamp) >= {since} \
+           AND toUnixTimestamp(timestamp) <= {until}"
+    );
+
+    if filter.grid_only.unwrap_or(false) {
+        sql.push_str(" AND grid != ''");
+    }
+
+    append_ignore_callsigns(&mut sql, ignore_callsigns);
+    append_reporter_filter(&mut sql, filter);
+    append_global_shared_filters(&mut sql, filter);
+
+    sql.push_str(&format!(
+        " ORDER BY toUnixTimestamp(timestamp) DESC LIMIT {limit} OFFSET {offset}"
+    ));
+
+    let rows: Vec<GlobalSpotRow> = client
+        .query(&sql)
+        .fetch_all()
+        .await
+        .context("global spots query")?;
+
+    Ok(rows.into_iter().map(GlobalSpot::from).collect())
+}
+
+/// Return up to 20 reporter callsigns that start with `prefix` (global only).
+///
+/// Used for reporter autocomplete in the filter panel.  No ignore-list is
+/// applied since `ignore_callsigns` targets transmitters, not reporters.
+///
+/// # Arguments
+///
+/// * `table`  — global spots table name
+/// * `prefix` — reporter callsign prefix to match
+pub async fn query_reporter_suggestions(
+    client: &clickhouse::Client,
+    table: &str,
+    prefix: &str,
+) -> anyhow::Result<Vec<String>> {
+    let safe = sanitise_callsign(prefix);
+    if safe.is_empty() {
+        return Ok(vec![]);
+    }
+    let like_pat = format!("{}%", safe.to_uppercase());
+
+    // Alias `reporter` as `callsign` to reuse the existing `CallsignRow` struct.
+    let sql = format!(
+        "SELECT DISTINCT reporter AS callsign \
+         FROM {table} \
+         WHERE upper(reporter) LIKE '{like_pat}' \
+         ORDER BY reporter LIMIT 20"
+    );
+
+    let rows: Vec<CallsignRow> = client
+        .query(&sql)
+        .fetch_all()
+        .await
+        .context("reporter suggestions query")?;
+
+    Ok(rows.into_iter().map(|r| r.callsign).collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -294,25 +456,24 @@ fn append_ignore_callsigns(sql: &mut String, ignore: &[String]) {
         .iter()
         .map(|cs| format!("'{}'", sanitise_callsign(cs)))
         .collect();
-    sql.push_str(&format!(" AND upper(callsign) NOT IN ({})", list.join(", ")));
+    sql.push_str(&format!(
+        " AND upper(callsign) NOT IN ({})",
+        list.join(", ")
+    ));
 }
 
-/// Append callsign, grid, band, SNR, and power WHERE clauses to `sql`.
+/// Append callsign, grid, band, SNR, and power WHERE clauses for the local
+/// `wspr_spots` table column names.
 ///
 /// Callsign and grid values may be prefixed with `!` to negate the match
 /// (e.g. `"!K1ABC"` → `NOT LIKE 'K1ABC%'`).
-///
-/// Modifies the string in place; the caller is responsible for having already
-/// opened a WHERE clause before calling this.
 fn append_shared_filters(sql: &mut String, filter: &SpotFilter) {
     if let Some(cs) = &filter.callsign {
         let (exclude, raw) = parse_exclude_prefix(cs);
         let safe = sanitise_callsign(raw);
         if !safe.is_empty() {
             let not = if exclude { "NOT " } else { "" };
-            sql.push_str(&format!(
-                " AND upper(callsign) {not}LIKE upper('{safe}%')"
-            ));
+            sql.push_str(&format!(" AND upper(callsign) {not}LIKE upper('{safe}%')"));
         }
     }
 
@@ -327,9 +488,7 @@ fn append_shared_filters(sql: &mut String, filter: &SpotFilter) {
     }
 
     if let Some(band_hz) = filter.band_hz {
-        sql.push_str(&format!(
-            " AND abs(freq_hz - {band_hz}) < 10000"
-        ));
+        sql.push_str(&format!(" AND abs(freq_hz - {band_hz}) < 10000"));
     }
 
     if let Some(snr_min) = filter.snr_min {
@@ -338,5 +497,70 @@ fn append_shared_filters(sql: &mut String, filter: &SpotFilter) {
 
     if let Some(power_max) = filter.power_max {
         sql.push_str(&format!(" AND power_dbm <= {power_max}"));
+    }
+}
+
+/// Append a reporter LIKE / NOT LIKE clause for the global `global_spots` table.
+///
+/// The `reporter` field in [`SpotFilter`] supports the same `!` negation prefix
+/// as the `callsign` filter.  Does nothing when `filter.reporter` is `None` or
+/// resolves to an empty string after sanitisation.
+fn append_reporter_filter(sql: &mut String, filter: &SpotFilter) {
+    if let Some(rep) = &filter.reporter {
+        let (exclude, raw) = parse_exclude_prefix(rep);
+        let safe = sanitise_callsign(raw);
+        if !safe.is_empty() {
+            let not = if exclude { "NOT " } else { "" };
+            sql.push_str(&format!(" AND upper(reporter) {not}LIKE upper('{safe}%')"));
+        }
+    }
+}
+
+/// Append callsign, grid, band, SNR, and power WHERE clauses for the global
+/// `global_spots` table column names.
+///
+/// Differences from [`append_shared_filters`]:
+/// - Uses `frequency` column (Float64, MHz) for band matching via index
+/// - Uses `snr` column (not `snr_db`)
+/// - Uses `power` column (not `power_dbm`)
+/// - Band filter uses the `band` integer column via wsprnet band index rather
+///   than frequency proximity, since the global table stores the pre-computed
+///   band number.
+fn append_global_shared_filters(sql: &mut String, filter: &SpotFilter) {
+    if let Some(cs) = &filter.callsign {
+        let (exclude, raw) = parse_exclude_prefix(cs);
+        let safe = sanitise_callsign(raw);
+        if !safe.is_empty() {
+            let not = if exclude { "NOT " } else { "" };
+            sql.push_str(&format!(" AND upper(callsign) {not}LIKE upper('{safe}%')"));
+        }
+    }
+
+    if let Some(g) = &filter.grid {
+        let (exclude, raw) = parse_exclude_prefix(g);
+        let safe = sanitise_locator(raw);
+        if !safe.is_empty() {
+            let safe_upper = safe.to_uppercase();
+            let not = if exclude { "NOT " } else { "" };
+            sql.push_str(&format!(" AND upper(grid) {not}LIKE '{safe_upper}%'"));
+        }
+    }
+
+    // Band filter: look up the wsprnet band index for the given dial frequency.
+    // The global_spots.band column stores the integer band number matching
+    // the position of the band in the standard wsprnet enumeration, which
+    // aligns with the index in wspr_bands().
+    if let Some(band_hz) = filter.band_hz {
+        if let Some(idx) = wspr_bands().iter().position(|b| b.dial_hz == band_hz) {
+            sql.push_str(&format!(" AND band = {idx}"));
+        }
+    }
+
+    if let Some(snr_min) = filter.snr_min {
+        sql.push_str(&format!(" AND snr >= {snr_min}"));
+    }
+
+    if let Some(power_max) = filter.power_max {
+        sql.push_str(&format!(" AND power <= {power_max}"));
     }
 }
